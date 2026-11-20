@@ -870,7 +870,7 @@
   function gridEventHtml(e) {
     /* 칸 경계선에 딱 붙지 않게 위아래·좌우로 2px씩 띄운다 */
     var style = '--h:' + e.hue + ';top:calc(' + pctText(e.top) + ' + 2px);height:calc(' + pctText(e.height) + ' - 4px)' +
-      ';left:calc(' + pctText(e.left) + ' + 2px);width:calc(' + pctText(e.width) + ' - 4px)';
+      ';left:calc(' + pctText(e.left) + ' + 1px);width:calc(' + pctText(e.width) + ' - 2px)';
     var tip = e.name + ' ' + e.timeText + (e.place ? ' · ' + e.place : '') + (e.memo ? ' · ' + e.memo : '');
     var span = String(e.timeText).split('~');
     return '<button class="tt-ev' + (e.compact ? ' is-compact' : '') + '" type="button" style="' + style + '"' +
@@ -925,7 +925,8 @@
     return '<section class="tt-block" style="--c:' + esc(kid.color) + '">' + head + note +
       (view.empty ? '' :
         '<div class="tt-scroll">' +
-        '<div class="tt" style="--rows:' + (view.rows.length || 1) + ';--days:' + view.days.length + '">' +
+        '<div class="tt' + (view.days.length >= 7 ? ' is-dense' : '') + '" style="--rows:' + (view.rows.length || 1) +
+        ';--days:' + view.days.length + '">' +
         '<div class="tt-corner" aria-hidden="true">시간</div>' +
         '<div class="tt-days">' + dayHeads + '</div>' +
         '<div class="tt-allday-label"><b>종일</b><span>메모</span></div>' +
