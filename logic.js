@@ -825,6 +825,20 @@
     }
 
     var events = [], allDay = [];
+    /* 같은 표 안에서 색이 겹치지 않게: 이름별 색을 먼저 정하고, 이미 쓴 색이면 다음 색으로 미룬다 */
+    var hueUsed = {}, hueByName = {};
+    list.forEach(function (c) {
+      var name = String(c.name || '');
+      if (hueByName[name] != null) return;
+      var h = gridHue(name), idx = GRID_HUES.indexOf(h), tries = 0;
+      while (hueUsed[h] && hueUsed[h] !== name && tries < GRID_HUES.length) {
+        idx = (idx + 1) % GRID_HUES.length;
+        h = GRID_HUES[idx];
+        tries += 1;
+      }
+      hueByName[name] = h;
+      hueUsed[h] = name;
+    });
     list.forEach(function (c) {
       var r = classMinutes(c);
       (c.days || []).forEach(function (day) {
@@ -843,7 +857,7 @@
           minutes: r.minutes,
           timeText: hhmmText(r.start) + '~' + hhmmText(r.end),
           compact: r.minutes < 50,
-          hue: gridHue(c.name),
+          hue: hueByName[String(c.name || '')],
           place: c.place || '',
           memo: c.memo || ''
         });

@@ -1068,10 +1068,10 @@ body.grid-open { overflow: hidden; }
 }
 .grid-blocks {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr));
   gap: 12px;
   align-items: start;
-  max-width: 1240px;
+  max-width: 1480px;
   margin: 0 auto;
 }
 .grid-notice { max-width: 480px; margin: 0 auto; }
@@ -1102,11 +1102,11 @@ body.grid-open { overflow: hidden; }
 }
 
 .tt {
-  --tt-gutter: 54px;
+  --tt-gutter: 50px;
   --row-h: 46px;
   display: grid;
   grid-template-columns: var(--tt-gutter) minmax(0, 1fr);
-  min-width: calc(var(--tt-gutter) + var(--days) * 78px);
+  min-width: calc(var(--tt-gutter) + var(--days) * 62px);
 }
 
 .tt-corner,
@@ -1133,7 +1133,7 @@ body.grid-open { overflow: hidden; }
 .tt-days { display: flex; border-bottom: 1px solid var(--line); }
 .tt-dayhead {
   flex: 1 1 0;
-  min-width: 78px;
+  min-width: 62px;
   min-height: 34px;
   display: flex;
   flex-direction: column;
@@ -1152,7 +1152,7 @@ body.grid-open { overflow: hidden; }
 .tt-allday { display: flex; border-bottom: 1px solid var(--line); min-height: 30px; }
 .tt-allday-cell {
   flex: 1 1 0;
-  min-width: 78px;
+  min-width: 62px;
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
@@ -1211,7 +1211,7 @@ body.grid-open { overflow: hidden; }
 .tt-col {
   position: relative;
   flex: 1 1 0;
-  min-width: 78px;
+  min-width: 62px;
   border-left: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 .tt-col.is-today { background: color-mix(in srgb, var(--accent) 5%, transparent); }
@@ -1244,7 +1244,7 @@ body.grid-open { overflow: hidden; }
 .tt-ev.is-compact .tt-ev-time { display: none; }
 
 @media (min-width: 700px) {
-  .tt { --row-h: 50px; --tt-gutter: 58px; }
+  .tt { --row-h: 50px; --tt-gutter: 56px; }
   .tt-ev-name { font-size: 11.5px; }
 }
 
@@ -2138,6 +2138,20 @@ body.grid-open { overflow: hidden; }
     }
 
     var events = [], allDay = [];
+    /* 같은 표 안에서 색이 겹치지 않게: 이름별 색을 먼저 정하고, 이미 쓴 색이면 다음 색으로 미룬다 */
+    var hueUsed = {}, hueByName = {};
+    list.forEach(function (c) {
+      var name = String(c.name || '');
+      if (hueByName[name] != null) return;
+      var h = gridHue(name), idx = GRID_HUES.indexOf(h), tries = 0;
+      while (hueUsed[h] && hueUsed[h] !== name && tries < GRID_HUES.length) {
+        idx = (idx + 1) % GRID_HUES.length;
+        h = GRID_HUES[idx];
+        tries += 1;
+      }
+      hueByName[name] = h;
+      hueUsed[h] = name;
+    });
     list.forEach(function (c) {
       var r = classMinutes(c);
       (c.days || []).forEach(function (day) {
@@ -2156,7 +2170,7 @@ body.grid-open { overflow: hidden; }
           minutes: r.minutes,
           timeText: hhmmText(r.start) + '~' + hhmmText(r.end),
           compact: r.minutes < 50,
-          hue: gridHue(c.name),
+          hue: hueByName[String(c.name || '')],
           place: c.place || '',
           memo: c.memo || ''
         });
