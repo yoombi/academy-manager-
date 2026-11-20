@@ -1492,7 +1492,7 @@
     var proto = window.location.protocol;
     if (proto !== 'https:' && proto !== 'http:') return;
     try {
-      navigator.serviceWorker.register('sw.js').then(function (reg) {
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
         state.swReg = reg;
       }).catch(function () { /* 오프라인 캐시 없이도 동작 */ });
       navigator.serviceWorker.addEventListener('message', function (ev) {
