@@ -1618,7 +1618,10 @@ textarea.input { resize: vertical; line-height: 1.5; }
 
   function renderMain() {
     if (state.kid !== 'all' && !kidById(state.kid)) state.kid = 'all';
-    if (!state.data.kids.length) return onboardingCard();
+    if (!state.data.kids.length) {
+      /* 아이가 없어도 설정(백업 복원 등)은 열 수 있어야 한다 */
+      return state.view === 'settings' ? viewSettings() : onboardingCard();
+    }
     if (state.view === 'schedule') return viewSchedule();
     if (state.view === 'homework') return viewHomework();
     if (state.view === 'settings') return viewSettings();
@@ -1638,6 +1641,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
       '<div class="intro-actions">' +
       '<button class="btn primary block" data-action="add-kid">아이 추가하기</button>' +
       '<button class="btn ghost block" data-action="load-sample">예시 계획표로 둘러보기</button>' +
+      '<button class="btn ghost block" data-action="import-json">백업 불러오기</button>' +
       '</div></section>';
   }
 
