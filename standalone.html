@@ -888,6 +888,63 @@ textarea.input { resize: vertical; line-height: 1.5; }
 }
 .pin-help p { margin: 0 0 10px; }
 
+/* ---------- 캘린더(.ics) 불러오기 ---------- */
+.ics-import-card .card-desc { margin-bottom: 10px; }
+.ics-sheet { max-width: 560px; }
+.ics-sheet .card-desc { margin-bottom: 4px; }
+.ics-sheet .row-note { padding: 4px 0 10px; }
+.ics-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.ics-list-head b { font-size: 13px; font-weight: 800; color: var(--text-2); }
+.ics-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  margin-bottom: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.ics-list > li + li { border-top: 1px solid var(--line); }
+.ics-row { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; background: var(--surface); }
+.ics-row .check { margin-top: 1px; }
+.ics-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.ics-name { font-size: 14px; font-weight: 700; line-height: 1.3; word-break: break-word; }
+.ics-row:not(.on) .ics-name { color: var(--muted); }
+.ics-meta { font-size: 12px; color: var(--muted); }
+.ics-tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.ics-badge {
+  font-size: 10.5px;
+  font-weight: 750;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.ics-badge.dup { background: var(--warn-soft); color: var(--warn); }
+.ics-sheet .form-err { margin-bottom: 10px; }
+.ics-sheet .setting { border-top: 1px solid var(--line); }
+
 @media (min-width: 480px) {
   .hero-name { font-size: 26px; }
 }
@@ -918,6 +975,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 <div id="modalRoot"></div>
 <div id="toastRoot" class="toast-root" aria-live="polite"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
+<input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 
 <noscript><p style="padding:24px;font-size:16px">이 앱을 사용하려면 브라우저의 자바스크립트를 켜 주세요.</p></noscript>
 
@@ -1326,6 +1384,289 @@ textarea.input { resize: vertical; line-height: 1.5; }
     return lines.map(foldLine).join('\r\n') + '\r\n';
   }
 
+  /* ---------- .ics 불러오기(파싱) ----------
+     구글 캘린더/애플 캘린더가 내보낸 .ics 와 이 앱이 내보낸 .ics 를 모두 읽는다.
+     앱의 학원 일정은 “요일 + 시작·종료 시각”만 담으므로, 반복 일정은 BYDAY(없으면 DTSTART 요일),
+     단발 일정은 그 날짜의 요일로 옮긴다. */
+
+  /* RFC 5545 줄바꿈 접기(folding)를 편다 — CRLF/LF 모두 받는다 */
+  function icsUnfold(text) {
+    var s = String(text == null ? '' : text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return s.replace(/\n[ \t]/g, '');
+  }
+
+  /* \, \; \n \\ 이스케이프 해제 */
+  function icsUnescape(text) {
+    var s = String(text == null ? '' : text), out = '';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === '\\' && i + 1 < s.length) {
+        var n = s.charAt(i + 1);
+        if (n === 'n' || n === 'N') { out += '\n'; i++; continue; }
+        if (n === ',' || n === ';' || n === '\\') { out += n; i++; continue; }
+      }
+      out += ch;
+    }
+    return out;
+  }
+
+  /* 'DTSTART;TZID=Asia/Seoul:20261123T160000' → { name, params, value } */
+  function icsLineParts(line) {
+    var inQuote = false, colonAt = -1;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line.charAt(i);
+      if (ch === '"') inQuote = !inQuote;
+      else if (ch === ':' && !inQuote) { colonAt = i; break; }
+    }
+    if (colonAt < 0) return null;
+    var head = line.slice(0, colonAt), value = line.slice(colonAt + 1);
+    var bits = head.split(';');
+    var name = String(bits.shift() || '').trim().toUpperCase();
+    if (!name) return null;
+    var params = {};
+    bits.forEach(function (b) {
+      var eq = b.indexOf('=');
+      if (eq < 0) return;
+      var key = b.slice(0, eq).trim().toUpperCase();
+      var val = b.slice(eq + 1).trim().replace(/^"|"$/g, '');
+      if (key) params[key] = val;
+    });
+    return { name: name, params: params, value: value };
+  }
+
+  /* 20261123T160000 / 20261123T070000Z / 20261123 → 한국 시간 기준 { y, mo, d, minutes, allDay }
+     끝에 Z 가 붙은 UTC 값은 +9시간 해 KST 로 옮긴다(날짜가 넘어갈 수 있음). */
+  function icsDateValue(value, params) {
+    var v = String(value == null ? '' : value).trim();
+    var allDay = String((params || {}).VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(v);
+    var m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?)?(Z)?$/.exec(v);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (allDay) return { y: y, mo: mo, d: d, minutes: null, allDay: true, utc: false };
+    var hh = m[4] ? Number(m[4]) : 0, mi = m[5] ? Number(m[5]) : 0;
+    if (m[7]) {
+      var u = new Date(Date.UTC(y, mo - 1, d, hh, mi, 0, 0) + 9 * 3600000);
+      return {
+        y: u.getUTCFullYear(), mo: u.getUTCMonth() + 1, d: u.getUTCDate(),
+        minutes: u.getUTCHours() * 60 + u.getUTCMinutes(), allDay: false, utc: true
+      };
+    }
+    return { y: y, mo: mo, d: d, minutes: hh * 60 + mi, allDay: false, utc: false };
+  }
+
+  /* 그 날짜의 요일 (월=1 … 일=7) */
+  function icsWeekday(y, mo, d) { return dayIndex(new Date(y, mo - 1, d)); }
+
+  /* 'FREQ=WEEKLY;BYDAY=MO,WE' → { FREQ:'WEEKLY', BYDAY:'MO,WE' } */
+  function icsRule(value) {
+    var rule = {};
+    String(value == null ? '' : value).split(';').forEach(function (part) {
+      var eq = part.indexOf('=');
+      if (eq < 0) return;
+      var k = part.slice(0, eq).trim().toUpperCase();
+      if (k) rule[k] = part.slice(eq + 1).trim().toUpperCase();
+    });
+    return rule;
+  }
+
+  var ICS_WEEKDAYS = { MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6, SU: 7 };
+
+  /* BYDAY → [1..7] ('-1SU', '2MO' 같은 값도 요일만 취한다) */
+  function icsRuleDays(rule) {
+    var out = [];
+    String((rule && rule.BYDAY) || '').split(',').forEach(function (token) {
+      var m = /(-?\d+)?(MO|TU|WE|TH|FR|SA|SU)/.exec(String(token || '').toUpperCase());
+      if (!m) return;
+      var idx = ICS_WEEKDAYS[m[2]];
+      if (idx && out.indexOf(idx) < 0) out.push(idx);
+    });
+    return out.sort(function (a, b) { return a - b; });
+  }
+
+  /* 'PT1H30M' → 90 */
+  function icsDurationMinutes(text) {
+    var m = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(String(text == null ? '' : text).trim().toUpperCase());
+    if (!m) return null;
+    var mins = Number(m[1] || 0) * 10080 + Number(m[2] || 0) * 1440 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
+    return mins > 0 ? mins : null;
+  }
+
+  /* RRULE:UNTIL 이 이미 지났는지 */
+  function icsUntilPassed(rule, now) {
+    if (!rule || !rule.UNTIL) return false;
+    var u = icsDateValue(rule.UNTIL, {});
+    if (!u) return false;
+    var end = new Date(u.y, u.mo - 1, u.d,
+      u.minutes == null ? 23 : Math.floor(u.minutes / 60),
+      u.minutes == null ? 59 : u.minutes % 60, 0, 0);
+    return end < now;
+  }
+
+  /* .ics 본문 → 학원 일정 후보
+     opt: { now, pastDays (기본 7), futureDays (기본 180), limit (기본 200) }
+     반환: { items, total, skippedHomeworks, skippedPast, duplicates, truncated }
+     item: { title, days, start, end, allDay, place, memo, kidHint, uid, recurring, date } */
+  function parseICS(text, opt) {
+    opt = opt || {};
+    var now = opt.now || new Date();
+    var pastDays = opt.pastDays == null ? 7 : Number(opt.pastDays);
+    var futureDays = opt.futureDays == null ? 180 : Number(opt.futureDays);
+    var limit = opt.limit == null ? 200 : Number(opt.limit);
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var earliest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - pastDays);
+    var latest = new Date(today.getFullYear(), today.getMonth(), today.getDate() + futureDays);
+
+    var lines = icsUnfold(text).split('\n');
+    var items = [];
+    var seen = {};
+    var result = { items: items, total: 0, skippedHomeworks: 0, skippedPast: 0, duplicates: 0, truncated: 0 };
+    var cur = null, inAlarm = 0;
+
+    function flush() {
+      if (!cur) return;
+      result.total += 1;
+      var ev = cur;
+      cur = null;
+      var st = ev.start;
+      if (!st || ev.status === 'CANCELLED' || ev.recurrenceId) return;
+
+      var summary = String(ev.summary || '').trim();
+      /* 이 앱이 내보낸 숙제 마감(.ics)은 학원 일정이 아니므로 건너뛴다 */
+      if (/^\[숙제\]/.test(summary) || /^hw-/.test(String(ev.uid || ''))) {
+        result.skippedHomeworks += 1;
+        return;
+      }
+
+      var title = summary, kidHint = '';
+      var head = /^\[([^\[\]]{1,12})\]\s*(.+)$/.exec(summary);
+      if (head) { kidHint = head[1].trim(); title = head[2].trim(); }
+      if (!title) title = '학원';
+      title = title.slice(0, 60);
+
+      var rule = ev.rrule || null;
+      var ruleDays = icsRuleDays(rule);
+      var weekly = !!(rule && String(rule.FREQ || '') === 'WEEKLY');
+      var recurring = weekly || ruleDays.length > 0;
+      if (weekly && icsUntilPassed(rule, now)) { result.skippedPast += 1; return; }
+
+      var when = new Date(st.y, st.mo - 1, st.d);
+      if (!recurring && (when < earliest || when > latest)) { result.skippedPast += 1; return; }
+
+      var days = ruleDays.length ? ruleDays : [icsWeekday(st.y, st.mo, st.d)];
+      var allDay = !!st.allDay;
+      var start = '', end = '';
+      if (!allDay) {
+        start = minutesToHHMM(st.minutes);
+        var endMin = ev.end && !ev.end.allDay ? ev.end.minutes : null;
+        if (endMin == null && ev.duration) {
+          var dur = icsDurationMinutes(ev.duration);
+          if (dur != null) endMin = st.minutes + dur;
+        }
+        if (endMin == null || endMin <= st.minutes) endMin = st.minutes + 60;
+        end = minutesToHHMM(endMin);
+      }
+
+      var place = String(ev.location || '').trim().slice(0, 40);
+      var memo = String(ev.description || '').trim();
+      /* 이 앱이 내보낸 DESCRIPTION(“아이 · 장소 · 메모”)을 원래대로 되살린다 */
+      if (memo && kidHint) {
+        var bits = memo.split(' · ');
+        if (String(bits[0] || '').trim() === kidHint) {
+          bits.shift();
+          /* 장소는 LOCATION 에서 읽고, 설명에 같은 값이 한 번 더 있으면 지운다 */
+          if (place && bits.length && String(bits[0]).trim() === place) bits.shift();
+          memo = bits.join(' · ').trim();
+        }
+      }
+      memo = memo.replace(/\s*\n\s*/g, ' · ').slice(0, 200);
+
+      var key = [title, days.join(','), start, end, kidHint].join('|');
+      if (seen[key]) { result.duplicates += 1; return; }
+      seen[key] = true;
+
+      if (items.length >= limit) { result.truncated += 1; return; }
+      items.push({
+        title: title,
+        days: days,
+        start: start,
+        end: end,
+        allDay: allDay,
+        place: place,
+        memo: memo,
+        kidHint: kidHint,
+        uid: String(ev.uid || ''),
+        recurring: recurring,
+        date: st.y + '-' + pad2(st.mo) + '-' + pad2(st.d)
+      });
+    }
+
+    lines.forEach(function (line) {
+      if (!line) return;
+      var p = icsLineParts(line);
+      if (!p) return;
+      var value = String(p.value || '').trim();
+      var upper = value.toUpperCase();
+      if (p.name === 'BEGIN') {
+        if (upper === 'VEVENT') { cur = {}; inAlarm = 0; }
+        else if (upper === 'VALARM' && cur) inAlarm += 1;
+        return;
+      }
+      if (p.name === 'END') {
+        if (upper === 'VALARM') { if (inAlarm > 0) inAlarm -= 1; return; }
+        if (upper === 'VEVENT') { flush(); cur = null; inAlarm = 0; }
+        return;
+      }
+      if (!cur || inAlarm) return; /* VALARM 의 SUMMARY·DESCRIPTION 은 일정 내용이 아니다 */
+      if (p.name === 'SUMMARY') cur.summary = icsUnescape(p.value);
+      else if (p.name === 'DESCRIPTION') cur.description = icsUnescape(p.value);
+      else if (p.name === 'LOCATION') cur.location = icsUnescape(p.value);
+      else if (p.name === 'DTSTART') cur.start = icsDateValue(p.value, p.params);
+      else if (p.name === 'DTEND') cur.end = icsDateValue(p.value, p.params);
+      else if (p.name === 'DURATION') cur.duration = value;
+      else if (p.name === 'RRULE') cur.rrule = icsRule(p.value);
+      else if (p.name === 'UID') cur.uid = value;
+      else if (p.name === 'STATUS') cur.status = upper;
+      else if (p.name === 'RECURRENCE-ID') cur.recurrenceId = value;
+    });
+    flush();
+
+    items.sort(function (a, b) {
+      if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
+      if (a.recurring) {
+        var da = a.days[0] || 0, db = b.days[0] || 0;
+        if (da !== db) return da - db;
+      } else if (a.date !== b.date) {
+        return a.date < b.date ? -1 : 1;
+      }
+      return (hhmmToMinutes(a.start) || 0) - (hhmmToMinutes(b.start) || 0);
+    });
+
+    return result;
+  }
+
+  /* 이미 있는 학원 일정과 겹치는 요일 찾기 (중복 건너뛰기용)
+     같은 아이·같은 이름·같은 시작/종료 시각일 때 요일이 겹치면 중복으로 본다. */
+  function classDuplicates(classes, cand) {
+    var days = (cand && cand.days ? cand.days : []).slice();
+    var out = { all: false, covered: [], rest: days.slice(), match: null };
+    var name = String((cand && cand.name) || '').trim();
+    (classes || []).forEach(function (c) {
+      if (!c) return;
+      if (String(c.kidId || '') !== String((cand && cand.kidId) || '')) return;
+      if (String(c.name || '').trim() !== name) return;
+      if (String(c.start || '') !== String((cand && cand.start) || '')) return;
+      if (String(c.end || '') !== String((cand && cand.end) || '')) return;
+      var hit = days.filter(function (d) { return (c.days || []).indexOf(d) >= 0; });
+      if (!hit.length) return;
+      out.match = out.match || c;
+      hit.forEach(function (d) { if (out.covered.indexOf(d) < 0) out.covered.push(d); });
+    });
+    out.covered.sort(function (a, b) { return a - b; });
+    out.rest = days.filter(function (d) { return out.covered.indexOf(d) < 0; });
+    out.all = days.length > 0 && out.rest.length === 0;
+    return out;
+  }
+
   var api = {
     DAY_LABELS: DAY_LABELS,
     DAY_LONGS: DAY_LONGS,
@@ -1360,7 +1701,18 @@ textarea.input { resize: vertical; line-height: 1.5; }
     isPinShape: isPinShape,
     icsEscape: icsEscape,
     foldLine: foldLine,
-    buildICS: buildICS
+    buildICS: buildICS,
+    icsUnfold: icsUnfold,
+    icsUnescape: icsUnescape,
+    icsLineParts: icsLineParts,
+    icsDateValue: icsDateValue,
+    icsWeekday: icsWeekday,
+    icsRule: icsRule,
+    icsRuleDays: icsRuleDays,
+    icsDurationMinutes: icsDurationMinutes,
+    icsUntilPassed: icsUntilPassed,
+    parseICS: parseICS,
+    classDuplicates: classDuplicates
   };
 
   global.AcademyLogic = api;
@@ -1375,7 +1727,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.4.0';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -1948,6 +2300,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
       '</ol>' +
       '<div class="intro-actions">' +
       '<button class="btn primary block" data-action="add-kid">아이 추가하기</button>' +
+      '<button class="btn ghost block" data-action="import-ics">📅 구글 캘린더(.ics)로 시작하기</button>' +
       '<button class="btn ghost block" data-action="load-sample">예시 계획표로 둘러보기</button>' +
       '<button class="btn ghost block" data-action="import-json">백업 불러오기</button>' +
       '</div></section>';
@@ -2136,7 +2489,12 @@ textarea.input { resize: vertical; line-height: 1.5; }
         '</div></li>';
     }).join('');
 
-    return '<section class="card">' +
+    return '<section class="card ics-import-card">' +
+      '<header class="card-head"><h2>캘린더에서 가져오기</h2><span class="card-count">.ics</span></header>' +
+      '<p class="card-desc">구글 캘린더에서 내보낸 파일을 불러오면 학원 일정이 이 시간표에 자동으로 채워져요.</p>' +
+      '<button class="btn primary block" data-action="import-ics">📅 구글 캘린더(.ics) 불러오기</button>' +
+      '</section>' +
+      '<section class="card">' +
       '<header class="card-head"><h2>이번 주 시간표</h2>' +
       '<button class="btn tiny" data-action="add-class">＋ 학원</button></header>' +
       '<div class="week">' + rows + '</div></section>' +
@@ -2283,6 +2641,10 @@ textarea.input { resize: vertical; line-height: 1.5; }
       '<button class="btn ghost" data-action="import-json">백업 불러오기</button>' +
       '</div>' +
       '<div class="btn-row">' +
+      '<button class="btn ghost" data-action="import-ics">📅 캘린더(.ics) 불러오기</button>' +
+      '</div>' +
+      '<p class="hint-line">구글 캘린더에서 내보낸 .ics 파일을 불러오면 학원 일정이 시간표에 채워져요. 아이를 0명에서 시작해도 이름을 넣고 바로 넣을 수 있어요.</p>' +
+      '<div class="btn-row">' +
       '<button class="btn ghost" data-action="load-sample">예시 계획표</button>' +
       '<button class="btn ghost danger" data-action="reset-all">전체 삭제</button>' +
       '</div></section>' +
@@ -2334,6 +2696,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
     document.body.classList.add('sheet-open');
     var t = state.sheet.type;
     if (t === 'pin') root.innerHTML = sheetPin();
+    else if (t === 'ics') root.innerHTML = sheetICS();
     else if (t === 'kid') root.innerHTML = sheetKid(state.sheet.id);
     else if (t === 'class') root.innerHTML = sheetClass(state.sheet.id);
     else if (t === 'routine') root.innerHTML = sheetRoutine(state.sheet.id);
@@ -2460,6 +2823,246 @@ textarea.input { resize: vertical; line-height: 1.5; }
         '<button type="button" class="chip' + (h.done ? ' on' : '') + '" data-action="toggle-done-in-sheet">' +
         (h.done ? '✓ 완료됨' : '미완료') + '</button></div></div>' : '');
     return sheetShell('homework', sheetReadOnly() ? '숙제' : (id ? '숙제 수정' : '숙제 추가'), body, id);
+  }
+
+  /* ---------- 캘린더(.ics) 불러오기 ---------- */
+
+  /* 새로 넣을 아이의 기본값: 고른 아이 → 아이가 하나면 그 아이 → 아이가 없으면 ‘new’ */
+  function defaultImportKid() {
+    var kids = state.data.kids;
+    if (!kids.length) return 'new';
+    if (state.kid !== 'all' && kidById(state.kid)) return state.kid;
+    return kids[0].id;
+  }
+
+  /* 미리보기 한 줄 설명: “월/수 16:00~17:30” / 단발이면 “11/25(수) 15:00~15:50” */
+  function icsWhenText(it) {
+    var timeText = it.allDay ? '종일' : (it.start ? it.start + '~' + it.end : '시간 미정');
+    if (!it.recurring && it.date) {
+      var p = String(it.date).split('-');
+      var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+      return L.monthDay(d) + '(' + L.dayLabel(L.dayIndex(d)) + ') ' + timeText;
+    }
+    return (it.days || []).map(L.dayLabel).join('/') + ' ' + timeText;
+  }
+
+  /* 지금 데이터와 견줘 ‘이미 있는 일정’ 표시를 다시 계산한다.
+     중복 건너뛰기가 켜져 있으면 중복된 줄의 체크를 저절로 풀고,
+     중복이 아니게 되면(아이를 바꾸는 등) 저절로 되살린다. */
+  function refreshIcsDuplicates() {
+    var s = state.sheet;
+    if (!s || s.type !== 'ics') return;
+    s.items.forEach(function (it) {
+      var kidId = it.kidId || (s.kidTarget === 'new' ? '' : s.kidTarget);
+      var dup = L.classDuplicates(state.data.classes, {
+        kidId: kidId, name: it.title, days: it.days, start: it.start, end: it.end
+      });
+      it.dupAll = dup.all;
+      it.dupDays = dup.covered;
+      if (s.skipDup) {
+        if (it.dupAll && it.checked) { it.checked = false; it.autoOff = true; }
+        else if (!it.dupAll && it.autoOff) { it.checked = true; it.autoOff = false; }
+      }
+    });
+  }
+
+  /* .ics 본문을 읽어 미리보기 시트를 연다 */
+  function openIcsSheet(text, fileName) {
+    var parsed = L.parseICS(text, { now: new Date() });
+    if (!parsed.items.length) {
+      toast(parsed.skippedHomeworks
+        ? '숙제 마감만 든 파일이에요. 학원 일정이 있는 .ics 파일을 골라 주세요.'
+        : (parsed.total ? '이 파일에서 넣을 학원 일정을 찾지 못했어요.' : '.ics 파일을 읽지 못했어요.'));
+      return false;
+    }
+    var byName = {};
+    state.data.kids.forEach(function (k) { byName[String(k.name).trim()] = k.id; });
+
+    state.sheet = {
+      type: 'ics',
+      fileName: String(fileName || '.ics'),
+      items: parsed.items.map(function (it) {
+        return Object.assign({}, it, {
+          /* 파일 속 “[아이 이름]”이 지금 등록된 아이와 같으면 그 아이에게 넣는다 */
+          kidId: it.kidHint && byName[it.kidHint] ? byName[it.kidHint] : '',
+          checked: true,
+          autoOff: false,
+          dupAll: false,
+          dupDays: []
+        });
+      }),
+      skipDup: true,
+      kidTarget: defaultImportKid(),
+      newKidName: '',
+      err: '',
+      info: parsed
+    };
+    refreshIcsDuplicates();
+    renderAll();
+    return true;
+  }
+
+  function importICSFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      openIcsSheet(String(reader.result || ''), file.name || '.ics');
+    };
+    reader.onerror = function () { toast('파일을 읽지 못했어요.'); };
+    reader.readAsText(file);
+  }
+
+  function icsItemRow(it, i) {
+    var badge = '';
+    if (it.dupAll) badge = '<span class="ics-badge dup">이미 있음</span>';
+    else if (it.dupDays && it.dupDays.length) {
+      badge = '<span class="ics-badge dup">' + esc(it.dupDays.map(L.dayLabel).join('·')) + '요일은 이미 있음</span>';
+    }
+    if (!it.recurring) badge += '<span class="ics-badge">단발</span>';
+    return '<li class="ics-row' + (it.checked ? ' on' : '') + '">' +
+      '<button type="button" class="check' + (it.checked ? ' on' : '') + '" data-action="ics-toggle-item" data-i="' + i + '"' +
+      ' role="checkbox" aria-checked="' + (it.checked ? 'true' : 'false') + '"' +
+      ' aria-label="' + esc(it.title) + ' 넣기">' + (it.checked ? '✓' : '') + '</button>' +
+      '<button type="button" class="ics-main" data-action="ics-toggle-item" data-i="' + i + '">' +
+      '<span class="ics-name">' + esc(it.title) + '</span>' +
+      '<span class="ics-meta">' + esc(icsWhenText(it)) + (it.place ? ' · ' + esc(it.place) : '') + '</span>' +
+      (it.kidId || badge
+        ? '<span class="ics-tags">' + (it.kidId ? kidTag(it.kidId) : '') + badge + '</span>'
+        : '') +
+      '</button></li>';
+  }
+
+  function sheetICS() {
+    var s = state.sheet;
+    var items = s.items || [];
+    var picked = items.filter(function (it) { return it.checked; }).length;
+    var info = s.info || {};
+    var hinted = items.some(function (it) { return !!it.kidId; });
+
+    var kidBlock;
+    if (!state.data.kids.length) {
+      kidBlock = '<label class="field"><span class="field-label">새 아이 이름 <span class="hint">아직 등록된 아이가 없어요</span></span>' +
+        '<input class="input" data-ics-newkid="1" value="' + esc(s.newKidName) + '" placeholder="예: 첫째" maxlength="12" autocomplete="off"></label>';
+    } else if (state.data.kids.length === 1) {
+      var only = state.data.kids[0];
+      kidBlock = '<div class="field"><span class="field-label">넣을 시간표</span><div class="chips">' +
+        '<span class="chip on">' + esc(only.emoji + ' ' + only.name) + '</span></div></div>';
+    } else {
+      kidBlock = '<div class="field"><span class="field-label">어느 아이 시간표에 넣을까요</span><div class="chips">' +
+        state.data.kids.map(function (k) {
+          return '<button type="button" class="chip' + (s.kidTarget === k.id ? ' on' : '') + '"' +
+            ' data-action="ics-pick-kid" data-kid="' + k.id + '">' + esc(k.emoji + ' ' + k.name) + '</button>';
+        }).join('') + '</div></div>';
+    }
+
+    var notes = '';
+    if (info.skippedHomeworks) {
+      notes += '<p class="hint-line">숙제 마감 ' + info.skippedHomeworks + '개는 학원 일정이 아니라 뺐어요.</p>';
+    }
+    if (info.duplicates) {
+      notes += '<p class="hint-line">같은 일정이 여러 번 있어 ' + info.duplicates + '개는 하나로 합쳤어요.</p>';
+    }
+    if (info.truncated) {
+      notes += '<p class="hint-line">일정이 너무 많아 앞의 ' + items.length + '개만 보여 드려요.</p>';
+    }
+
+    return '<div class="sheet-wrap" role="dialog" aria-modal="true" aria-label="캘린더에서 불러오기">' +
+      '<div class="backdrop" data-action="close-sheet"></div>' +
+      '<div class="sheet ics-sheet">' +
+      '<div class="handle" aria-hidden="true"></div>' +
+      '<h2 class="sheet-title">📅 캘린더에서 불러오기</h2>' +
+      '<p class="card-desc">' + esc(s.fileName) + ' 에서 일정 ' + items.length + '개를 찾았어요. 시간표에 넣을 일정만 골라 주세요.</p>' +
+      '<p class="row-note">구글 캘린더 웹 → ⚙️ 설정 → 가져오기 및 내보내기 → 내보내기 로 받은 .ics 파일을 쓰면 돼요. (압축(zip)으로 받았다면 풀어서 .ics 파일을 고르세요.)</p>' +
+      kidBlock +
+      (hinted ? '<p class="hint-line">이름표 “[아이 이름]”가 붙은 일정은 그 아이에게 들어가요.</p>' : '') +
+      notes +
+      '<div class="ics-list-head"><b>넣을 일정 ' + picked + '/' + items.length + '</b>' +
+      '<button type="button" class="btn tiny ghost" data-action="ics-toggle-all">' + (picked ? '모두 해제' : '모두 선택') + '</button></div>' +
+      '<ul class="ics-list">' + items.map(icsItemRow).join('') + '</ul>' +
+      '<div class="setting"><span class="setting-label">이미 있는 일정은 건너뛰기</span>' +
+      '<button type="button" class="switch' + (s.skipDup ? ' on' : '') + '" role="switch" aria-checked="' + (s.skipDup ? 'true' : 'false') + '"' +
+      ' aria-label="중복 건너뛰기" data-action="ics-skip-dup"><span></span></button></div>' +
+      (s.err ? '<p class="form-err show" role="alert">' + esc(s.err) + '</p>' : '') +
+      '<div class="sheet-actions">' +
+      '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
+      '<button type="button" class="btn primary" data-action="ics-apply">' +
+      (picked ? picked + '개 시간표에 넣기' : '넣을 일정을 골라 주세요') + '</button>' +
+      '</div></div></div>';
+  }
+
+  /* 고른 일정을 학원 일정으로 저장한다 */
+  function applyIcsImport() {
+    var s = state.sheet;
+    if (!s || s.type !== 'ics') return { ok: false, error: 'none' };
+    /* 혹시 시트를 연 사이 잠겼다면 다시 PIN 을 받는다 */
+    if (lockRequired()) { openPinSheet('unlock', function () { renderAll(); }); return { ok: false, error: 'locked' }; }
+
+    var chosen = (s.items || []).filter(function (it) { return it.checked; });
+    if (!chosen.length) {
+      s.err = '넣을 일정을 하나 이상 골라 주세요.';
+      renderAll();
+      return { ok: false, error: 'empty' };
+    }
+
+    var targetKid = s.kidTarget;
+    if (!state.data.kids.length || targetKid === 'new') {
+      var name = String(s.newKidName || '').trim();
+      if (!name) {
+        s.err = '새 아이 이름을 입력해 주세요.';
+        renderAll();
+        return { ok: false, error: 'nokid' };
+      }
+      var created = upsertKid({ name: name });
+      if (!created.ok) {
+        s.err = created.error;
+        renderAll();
+        return { ok: false, error: 'nokid' };
+      }
+      targetKid = created.kid.id;
+    }
+    if (!kidById(targetKid)) {
+      s.err = '일정을 넣을 아이를 골라 주세요.';
+      renderAll();
+      return { ok: false, error: 'nokid' };
+    }
+
+    var added = 0, skipped = 0, partial = 0, failed = 0;
+    var kidIds = {};
+    chosen.forEach(function (it) {
+      var kidId = it.kidId || targetKid;
+      var days = (it.days || []).slice();
+      if (s.skipDup) {
+        var dup = L.classDuplicates(state.data.classes, {
+          kidId: kidId, name: it.title, days: days, start: it.start, end: it.end
+        });
+        if (dup.all) { skipped += 1; return; }
+        if (dup.rest.length && dup.rest.length < days.length) { days = dup.rest; partial += 1; }
+      }
+      if (!days.length) { skipped += 1; return; }
+      var res = upsertClass({
+        kidId: kidId,
+        name: it.title,
+        days: days,
+        start: it.start || '',
+        end: it.end || '',
+        place: it.place || '',
+        memo: it.memo || ''
+      });
+      if (res.ok) { added += 1; kidIds[kidId] = true; } else failed += 1;
+    });
+
+    var msg = added ? '일정 ' + added + '개를 시간표에 넣었어요' : '새로 넣을 일정이 없었어요';
+    if (skipped) msg += ' (이미 있어서 ' + skipped + '개 건너뜀)';
+    if (failed) msg += ' · ' + failed + '개는 넣지 못했어요';
+    if (partial) msg += ' · ' + partial + '개는 겹치지 않는 요일만 넣었어요';
+
+    state.sheet = null;
+    state.view = 'schedule';
+    var kidsTouched = Object.keys(kidIds);
+    state.kid = kidsTouched.length === 1 ? kidsTouched[0] : 'all';
+    renderAll();
+    toast(msg);
+    return { ok: true, added: added, skipped: skipped, failed: failed, partial: partial };
   }
 
   /* ---------- 관리자 비밀번호(PIN) 입력 ---------- */
@@ -3231,6 +3834,51 @@ textarea.input { resize: vertical; line-height: 1.5; }
       case 'export-ics':
         exportICS(el.getAttribute('data-scope'));
         break;
+      case 'import-ics':
+        guardEdit(function () {
+          var icsInput = document.getElementById('icsFile');
+          if (icsInput) { try { icsInput.click(); } catch (e) { /* 무시 */ } }
+        });
+        break;
+      case 'ics-toggle-item':
+        if (state.sheet && state.sheet.type === 'ics') {
+          var icsRow = state.sheet.items[Number(el.getAttribute('data-i'))];
+          if (icsRow) { icsRow.checked = !icsRow.checked; state.sheet.err = ''; renderAll(); }
+        }
+        break;
+      case 'ics-toggle-all':
+        if (state.sheet && state.sheet.type === 'ics') {
+          var anyPicked = state.sheet.items.some(function (it) { return it.checked; });
+          state.sheet.items.forEach(function (it) { it.checked = !anyPicked; });
+          state.sheet.err = '';
+          renderAll();
+        }
+        break;
+      case 'ics-skip-dup':
+        if (state.sheet && state.sheet.type === 'ics') {
+          state.sheet.skipDup = !state.sheet.skipDup;
+          if (state.sheet.skipDup) {
+            state.sheet.items.forEach(function (it) {
+              if (it.dupAll) { it.checked = false; it.autoOff = true; }
+            });
+          } else {
+            state.sheet.items.forEach(function (it) { it.checked = true; it.autoOff = false; });
+          }
+          state.sheet.err = '';
+          renderAll();
+        }
+        break;
+      case 'ics-pick-kid':
+        if (state.sheet && state.sheet.type === 'ics') {
+          state.sheet.kidTarget = el.getAttribute('data-kid') || state.sheet.kidTarget;
+          state.sheet.err = '';
+          refreshIcsDuplicates();
+          renderAll();
+        }
+        break;
+      case 'ics-apply':
+        applyIcsImport();
+        break;
       case 'load-sample':
         guardEdit(loadSamplePlan);
         break;
@@ -3302,6 +3950,16 @@ textarea.input { resize: vertical; line-height: 1.5; }
     if (t.id === 'importFile') {
       importJSONFile(t.files && t.files[0]);
       t.value = '';
+    }
+    if (t.id === 'icsFile') {
+      importICSFile(t.files && t.files[0]);
+      t.value = '';
+    }
+    if (t.getAttribute && t.getAttribute('data-ics-newkid')) {
+      if (state.sheet && state.sheet.type === 'ics') {
+        state.sheet.newKidName = t.value;
+        state.sheet.err = '';
+      }
     }
   }
 
@@ -3464,6 +4122,12 @@ textarea.input { resize: vertical; line-height: 1.5; }
     liveText: liveText,
     whenText: whenText,
     exportICS: exportICS,
+    importICSFile: importICSFile,
+    openIcsSheet: openIcsSheet,
+    sheetICS: sheetICS,
+    applyIcsImport: applyIcsImport,
+    refreshIcsDuplicates: refreshIcsDuplicates,
+    icsWhenText: icsWhenText,
     toast: toast,
     handleClick: handleClick,
     handleChange: handleChange,

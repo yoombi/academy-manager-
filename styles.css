@@ -875,6 +875,63 @@ textarea.input { resize: vertical; line-height: 1.5; }
 }
 .pin-help p { margin: 0 0 10px; }
 
+/* ---------- 캘린더(.ics) 불러오기 ---------- */
+.ics-import-card .card-desc { margin-bottom: 10px; }
+.ics-sheet { max-width: 560px; }
+.ics-sheet .card-desc { margin-bottom: 4px; }
+.ics-sheet .row-note { padding: 4px 0 10px; }
+.ics-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.ics-list-head b { font-size: 13px; font-weight: 800; color: var(--text-2); }
+.ics-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  margin-bottom: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.ics-list > li + li { border-top: 1px solid var(--line); }
+.ics-row { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; background: var(--surface); }
+.ics-row .check { margin-top: 1px; }
+.ics-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.ics-name { font-size: 14px; font-weight: 700; line-height: 1.3; word-break: break-word; }
+.ics-row:not(.on) .ics-name { color: var(--muted); }
+.ics-meta { font-size: 12px; color: var(--muted); }
+.ics-tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.ics-badge {
+  font-size: 10.5px;
+  font-weight: 750;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.ics-badge.dup { background: var(--warn-soft); color: var(--warn); }
+.ics-sheet .form-err { margin-bottom: 10px; }
+.ics-sheet .setting { border-top: 1px solid var(--line); }
+
 @media (min-width: 480px) {
   .hero-name { font-size: 26px; }
 }

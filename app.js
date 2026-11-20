@@ -4,7 +4,7 @@
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.4.0';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -577,6 +577,7 @@
       '</ol>' +
       '<div class="intro-actions">' +
       '<button class="btn primary block" data-action="add-kid">아이 추가하기</button>' +
+      '<button class="btn ghost block" data-action="import-ics">📅 구글 캘린더(.ics)로 시작하기</button>' +
       '<button class="btn ghost block" data-action="load-sample">예시 계획표로 둘러보기</button>' +
       '<button class="btn ghost block" data-action="import-json">백업 불러오기</button>' +
       '</div></section>';
@@ -765,7 +766,12 @@
         '</div></li>';
     }).join('');
 
-    return '<section class="card">' +
+    return '<section class="card ics-import-card">' +
+      '<header class="card-head"><h2>캘린더에서 가져오기</h2><span class="card-count">.ics</span></header>' +
+      '<p class="card-desc">구글 캘린더에서 내보낸 파일을 불러오면 학원 일정이 이 시간표에 자동으로 채워져요.</p>' +
+      '<button class="btn primary block" data-action="import-ics">📅 구글 캘린더(.ics) 불러오기</button>' +
+      '</section>' +
+      '<section class="card">' +
       '<header class="card-head"><h2>이번 주 시간표</h2>' +
       '<button class="btn tiny" data-action="add-class">＋ 학원</button></header>' +
       '<div class="week">' + rows + '</div></section>' +
@@ -912,6 +918,10 @@
       '<button class="btn ghost" data-action="import-json">백업 불러오기</button>' +
       '</div>' +
       '<div class="btn-row">' +
+      '<button class="btn ghost" data-action="import-ics">📅 캘린더(.ics) 불러오기</button>' +
+      '</div>' +
+      '<p class="hint-line">구글 캘린더에서 내보낸 .ics 파일을 불러오면 학원 일정이 시간표에 채워져요. 아이를 0명에서 시작해도 이름을 넣고 바로 넣을 수 있어요.</p>' +
+      '<div class="btn-row">' +
       '<button class="btn ghost" data-action="load-sample">예시 계획표</button>' +
       '<button class="btn ghost danger" data-action="reset-all">전체 삭제</button>' +
       '</div></section>' +
@@ -963,6 +973,7 @@
     document.body.classList.add('sheet-open');
     var t = state.sheet.type;
     if (t === 'pin') root.innerHTML = sheetPin();
+    else if (t === 'ics') root.innerHTML = sheetICS();
     else if (t === 'kid') root.innerHTML = sheetKid(state.sheet.id);
     else if (t === 'class') root.innerHTML = sheetClass(state.sheet.id);
     else if (t === 'routine') root.innerHTML = sheetRoutine(state.sheet.id);
@@ -1089,6 +1100,246 @@
         '<button type="button" class="chip' + (h.done ? ' on' : '') + '" data-action="toggle-done-in-sheet">' +
         (h.done ? '✓ 완료됨' : '미완료') + '</button></div></div>' : '');
     return sheetShell('homework', sheetReadOnly() ? '숙제' : (id ? '숙제 수정' : '숙제 추가'), body, id);
+  }
+
+  /* ---------- 캘린더(.ics) 불러오기 ---------- */
+
+  /* 새로 넣을 아이의 기본값: 고른 아이 → 아이가 하나면 그 아이 → 아이가 없으면 ‘new’ */
+  function defaultImportKid() {
+    var kids = state.data.kids;
+    if (!kids.length) return 'new';
+    if (state.kid !== 'all' && kidById(state.kid)) return state.kid;
+    return kids[0].id;
+  }
+
+  /* 미리보기 한 줄 설명: “월/수 16:00~17:30” / 단발이면 “11/25(수) 15:00~15:50” */
+  function icsWhenText(it) {
+    var timeText = it.allDay ? '종일' : (it.start ? it.start + '~' + it.end : '시간 미정');
+    if (!it.recurring && it.date) {
+      var p = String(it.date).split('-');
+      var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+      return L.monthDay(d) + '(' + L.dayLabel(L.dayIndex(d)) + ') ' + timeText;
+    }
+    return (it.days || []).map(L.dayLabel).join('/') + ' ' + timeText;
+  }
+
+  /* 지금 데이터와 견줘 ‘이미 있는 일정’ 표시를 다시 계산한다.
+     중복 건너뛰기가 켜져 있으면 중복된 줄의 체크를 저절로 풀고,
+     중복이 아니게 되면(아이를 바꾸는 등) 저절로 되살린다. */
+  function refreshIcsDuplicates() {
+    var s = state.sheet;
+    if (!s || s.type !== 'ics') return;
+    s.items.forEach(function (it) {
+      var kidId = it.kidId || (s.kidTarget === 'new' ? '' : s.kidTarget);
+      var dup = L.classDuplicates(state.data.classes, {
+        kidId: kidId, name: it.title, days: it.days, start: it.start, end: it.end
+      });
+      it.dupAll = dup.all;
+      it.dupDays = dup.covered;
+      if (s.skipDup) {
+        if (it.dupAll && it.checked) { it.checked = false; it.autoOff = true; }
+        else if (!it.dupAll && it.autoOff) { it.checked = true; it.autoOff = false; }
+      }
+    });
+  }
+
+  /* .ics 본문을 읽어 미리보기 시트를 연다 */
+  function openIcsSheet(text, fileName) {
+    var parsed = L.parseICS(text, { now: new Date() });
+    if (!parsed.items.length) {
+      toast(parsed.skippedHomeworks
+        ? '숙제 마감만 든 파일이에요. 학원 일정이 있는 .ics 파일을 골라 주세요.'
+        : (parsed.total ? '이 파일에서 넣을 학원 일정을 찾지 못했어요.' : '.ics 파일을 읽지 못했어요.'));
+      return false;
+    }
+    var byName = {};
+    state.data.kids.forEach(function (k) { byName[String(k.name).trim()] = k.id; });
+
+    state.sheet = {
+      type: 'ics',
+      fileName: String(fileName || '.ics'),
+      items: parsed.items.map(function (it) {
+        return Object.assign({}, it, {
+          /* 파일 속 “[아이 이름]”이 지금 등록된 아이와 같으면 그 아이에게 넣는다 */
+          kidId: it.kidHint && byName[it.kidHint] ? byName[it.kidHint] : '',
+          checked: true,
+          autoOff: false,
+          dupAll: false,
+          dupDays: []
+        });
+      }),
+      skipDup: true,
+      kidTarget: defaultImportKid(),
+      newKidName: '',
+      err: '',
+      info: parsed
+    };
+    refreshIcsDuplicates();
+    renderAll();
+    return true;
+  }
+
+  function importICSFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      openIcsSheet(String(reader.result || ''), file.name || '.ics');
+    };
+    reader.onerror = function () { toast('파일을 읽지 못했어요.'); };
+    reader.readAsText(file);
+  }
+
+  function icsItemRow(it, i) {
+    var badge = '';
+    if (it.dupAll) badge = '<span class="ics-badge dup">이미 있음</span>';
+    else if (it.dupDays && it.dupDays.length) {
+      badge = '<span class="ics-badge dup">' + esc(it.dupDays.map(L.dayLabel).join('·')) + '요일은 이미 있음</span>';
+    }
+    if (!it.recurring) badge += '<span class="ics-badge">단발</span>';
+    return '<li class="ics-row' + (it.checked ? ' on' : '') + '">' +
+      '<button type="button" class="check' + (it.checked ? ' on' : '') + '" data-action="ics-toggle-item" data-i="' + i + '"' +
+      ' role="checkbox" aria-checked="' + (it.checked ? 'true' : 'false') + '"' +
+      ' aria-label="' + esc(it.title) + ' 넣기">' + (it.checked ? '✓' : '') + '</button>' +
+      '<button type="button" class="ics-main" data-action="ics-toggle-item" data-i="' + i + '">' +
+      '<span class="ics-name">' + esc(it.title) + '</span>' +
+      '<span class="ics-meta">' + esc(icsWhenText(it)) + (it.place ? ' · ' + esc(it.place) : '') + '</span>' +
+      (it.kidId || badge
+        ? '<span class="ics-tags">' + (it.kidId ? kidTag(it.kidId) : '') + badge + '</span>'
+        : '') +
+      '</button></li>';
+  }
+
+  function sheetICS() {
+    var s = state.sheet;
+    var items = s.items || [];
+    var picked = items.filter(function (it) { return it.checked; }).length;
+    var info = s.info || {};
+    var hinted = items.some(function (it) { return !!it.kidId; });
+
+    var kidBlock;
+    if (!state.data.kids.length) {
+      kidBlock = '<label class="field"><span class="field-label">새 아이 이름 <span class="hint">아직 등록된 아이가 없어요</span></span>' +
+        '<input class="input" data-ics-newkid="1" value="' + esc(s.newKidName) + '" placeholder="예: 첫째" maxlength="12" autocomplete="off"></label>';
+    } else if (state.data.kids.length === 1) {
+      var only = state.data.kids[0];
+      kidBlock = '<div class="field"><span class="field-label">넣을 시간표</span><div class="chips">' +
+        '<span class="chip on">' + esc(only.emoji + ' ' + only.name) + '</span></div></div>';
+    } else {
+      kidBlock = '<div class="field"><span class="field-label">어느 아이 시간표에 넣을까요</span><div class="chips">' +
+        state.data.kids.map(function (k) {
+          return '<button type="button" class="chip' + (s.kidTarget === k.id ? ' on' : '') + '"' +
+            ' data-action="ics-pick-kid" data-kid="' + k.id + '">' + esc(k.emoji + ' ' + k.name) + '</button>';
+        }).join('') + '</div></div>';
+    }
+
+    var notes = '';
+    if (info.skippedHomeworks) {
+      notes += '<p class="hint-line">숙제 마감 ' + info.skippedHomeworks + '개는 학원 일정이 아니라 뺐어요.</p>';
+    }
+    if (info.duplicates) {
+      notes += '<p class="hint-line">같은 일정이 여러 번 있어 ' + info.duplicates + '개는 하나로 합쳤어요.</p>';
+    }
+    if (info.truncated) {
+      notes += '<p class="hint-line">일정이 너무 많아 앞의 ' + items.length + '개만 보여 드려요.</p>';
+    }
+
+    return '<div class="sheet-wrap" role="dialog" aria-modal="true" aria-label="캘린더에서 불러오기">' +
+      '<div class="backdrop" data-action="close-sheet"></div>' +
+      '<div class="sheet ics-sheet">' +
+      '<div class="handle" aria-hidden="true"></div>' +
+      '<h2 class="sheet-title">📅 캘린더에서 불러오기</h2>' +
+      '<p class="card-desc">' + esc(s.fileName) + ' 에서 일정 ' + items.length + '개를 찾았어요. 시간표에 넣을 일정만 골라 주세요.</p>' +
+      '<p class="row-note">구글 캘린더 웹 → ⚙️ 설정 → 가져오기 및 내보내기 → 내보내기 로 받은 .ics 파일을 쓰면 돼요. (압축(zip)으로 받았다면 풀어서 .ics 파일을 고르세요.)</p>' +
+      kidBlock +
+      (hinted ? '<p class="hint-line">이름표 “[아이 이름]”가 붙은 일정은 그 아이에게 들어가요.</p>' : '') +
+      notes +
+      '<div class="ics-list-head"><b>넣을 일정 ' + picked + '/' + items.length + '</b>' +
+      '<button type="button" class="btn tiny ghost" data-action="ics-toggle-all">' + (picked ? '모두 해제' : '모두 선택') + '</button></div>' +
+      '<ul class="ics-list">' + items.map(icsItemRow).join('') + '</ul>' +
+      '<div class="setting"><span class="setting-label">이미 있는 일정은 건너뛰기</span>' +
+      '<button type="button" class="switch' + (s.skipDup ? ' on' : '') + '" role="switch" aria-checked="' + (s.skipDup ? 'true' : 'false') + '"' +
+      ' aria-label="중복 건너뛰기" data-action="ics-skip-dup"><span></span></button></div>' +
+      (s.err ? '<p class="form-err show" role="alert">' + esc(s.err) + '</p>' : '') +
+      '<div class="sheet-actions">' +
+      '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
+      '<button type="button" class="btn primary" data-action="ics-apply">' +
+      (picked ? picked + '개 시간표에 넣기' : '넣을 일정을 골라 주세요') + '</button>' +
+      '</div></div></div>';
+  }
+
+  /* 고른 일정을 학원 일정으로 저장한다 */
+  function applyIcsImport() {
+    var s = state.sheet;
+    if (!s || s.type !== 'ics') return { ok: false, error: 'none' };
+    /* 혹시 시트를 연 사이 잠겼다면 다시 PIN 을 받는다 */
+    if (lockRequired()) { openPinSheet('unlock', function () { renderAll(); }); return { ok: false, error: 'locked' }; }
+
+    var chosen = (s.items || []).filter(function (it) { return it.checked; });
+    if (!chosen.length) {
+      s.err = '넣을 일정을 하나 이상 골라 주세요.';
+      renderAll();
+      return { ok: false, error: 'empty' };
+    }
+
+    var targetKid = s.kidTarget;
+    if (!state.data.kids.length || targetKid === 'new') {
+      var name = String(s.newKidName || '').trim();
+      if (!name) {
+        s.err = '새 아이 이름을 입력해 주세요.';
+        renderAll();
+        return { ok: false, error: 'nokid' };
+      }
+      var created = upsertKid({ name: name });
+      if (!created.ok) {
+        s.err = created.error;
+        renderAll();
+        return { ok: false, error: 'nokid' };
+      }
+      targetKid = created.kid.id;
+    }
+    if (!kidById(targetKid)) {
+      s.err = '일정을 넣을 아이를 골라 주세요.';
+      renderAll();
+      return { ok: false, error: 'nokid' };
+    }
+
+    var added = 0, skipped = 0, partial = 0, failed = 0;
+    var kidIds = {};
+    chosen.forEach(function (it) {
+      var kidId = it.kidId || targetKid;
+      var days = (it.days || []).slice();
+      if (s.skipDup) {
+        var dup = L.classDuplicates(state.data.classes, {
+          kidId: kidId, name: it.title, days: days, start: it.start, end: it.end
+        });
+        if (dup.all) { skipped += 1; return; }
+        if (dup.rest.length && dup.rest.length < days.length) { days = dup.rest; partial += 1; }
+      }
+      if (!days.length) { skipped += 1; return; }
+      var res = upsertClass({
+        kidId: kidId,
+        name: it.title,
+        days: days,
+        start: it.start || '',
+        end: it.end || '',
+        place: it.place || '',
+        memo: it.memo || ''
+      });
+      if (res.ok) { added += 1; kidIds[kidId] = true; } else failed += 1;
+    });
+
+    var msg = added ? '일정 ' + added + '개를 시간표에 넣었어요' : '새로 넣을 일정이 없었어요';
+    if (skipped) msg += ' (이미 있어서 ' + skipped + '개 건너뜀)';
+    if (failed) msg += ' · ' + failed + '개는 넣지 못했어요';
+    if (partial) msg += ' · ' + partial + '개는 겹치지 않는 요일만 넣었어요';
+
+    state.sheet = null;
+    state.view = 'schedule';
+    var kidsTouched = Object.keys(kidIds);
+    state.kid = kidsTouched.length === 1 ? kidsTouched[0] : 'all';
+    renderAll();
+    toast(msg);
+    return { ok: true, added: added, skipped: skipped, failed: failed, partial: partial };
   }
 
   /* ---------- 관리자 비밀번호(PIN) 입력 ---------- */
@@ -1860,6 +2111,51 @@
       case 'export-ics':
         exportICS(el.getAttribute('data-scope'));
         break;
+      case 'import-ics':
+        guardEdit(function () {
+          var icsInput = document.getElementById('icsFile');
+          if (icsInput) { try { icsInput.click(); } catch (e) { /* 무시 */ } }
+        });
+        break;
+      case 'ics-toggle-item':
+        if (state.sheet && state.sheet.type === 'ics') {
+          var icsRow = state.sheet.items[Number(el.getAttribute('data-i'))];
+          if (icsRow) { icsRow.checked = !icsRow.checked; state.sheet.err = ''; renderAll(); }
+        }
+        break;
+      case 'ics-toggle-all':
+        if (state.sheet && state.sheet.type === 'ics') {
+          var anyPicked = state.sheet.items.some(function (it) { return it.checked; });
+          state.sheet.items.forEach(function (it) { it.checked = !anyPicked; });
+          state.sheet.err = '';
+          renderAll();
+        }
+        break;
+      case 'ics-skip-dup':
+        if (state.sheet && state.sheet.type === 'ics') {
+          state.sheet.skipDup = !state.sheet.skipDup;
+          if (state.sheet.skipDup) {
+            state.sheet.items.forEach(function (it) {
+              if (it.dupAll) { it.checked = false; it.autoOff = true; }
+            });
+          } else {
+            state.sheet.items.forEach(function (it) { it.checked = true; it.autoOff = false; });
+          }
+          state.sheet.err = '';
+          renderAll();
+        }
+        break;
+      case 'ics-pick-kid':
+        if (state.sheet && state.sheet.type === 'ics') {
+          state.sheet.kidTarget = el.getAttribute('data-kid') || state.sheet.kidTarget;
+          state.sheet.err = '';
+          refreshIcsDuplicates();
+          renderAll();
+        }
+        break;
+      case 'ics-apply':
+        applyIcsImport();
+        break;
       case 'load-sample':
         guardEdit(loadSamplePlan);
         break;
@@ -1931,6 +2227,16 @@
     if (t.id === 'importFile') {
       importJSONFile(t.files && t.files[0]);
       t.value = '';
+    }
+    if (t.id === 'icsFile') {
+      importICSFile(t.files && t.files[0]);
+      t.value = '';
+    }
+    if (t.getAttribute && t.getAttribute('data-ics-newkid')) {
+      if (state.sheet && state.sheet.type === 'ics') {
+        state.sheet.newKidName = t.value;
+        state.sheet.err = '';
+      }
     }
   }
 
@@ -2093,6 +2399,12 @@
     liveText: liveText,
     whenText: whenText,
     exportICS: exportICS,
+    importICSFile: importICSFile,
+    openIcsSheet: openIcsSheet,
+    sheetICS: sheetICS,
+    applyIcsImport: applyIcsImport,
+    refreshIcsDuplicates: refreshIcsDuplicates,
+    icsWhenText: icsWhenText,
     toast: toast,
     handleClick: handleClick,
     handleChange: handleChange,

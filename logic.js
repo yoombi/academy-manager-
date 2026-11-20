@@ -402,6 +402,289 @@
     return lines.map(foldLine).join('\r\n') + '\r\n';
   }
 
+  /* ---------- .ics 불러오기(파싱) ----------
+     구글 캘린더/애플 캘린더가 내보낸 .ics 와 이 앱이 내보낸 .ics 를 모두 읽는다.
+     앱의 학원 일정은 “요일 + 시작·종료 시각”만 담으므로, 반복 일정은 BYDAY(없으면 DTSTART 요일),
+     단발 일정은 그 날짜의 요일로 옮긴다. */
+
+  /* RFC 5545 줄바꿈 접기(folding)를 편다 — CRLF/LF 모두 받는다 */
+  function icsUnfold(text) {
+    var s = String(text == null ? '' : text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return s.replace(/\n[ \t]/g, '');
+  }
+
+  /* \, \; \n \\ 이스케이프 해제 */
+  function icsUnescape(text) {
+    var s = String(text == null ? '' : text), out = '';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === '\\' && i + 1 < s.length) {
+        var n = s.charAt(i + 1);
+        if (n === 'n' || n === 'N') { out += '\n'; i++; continue; }
+        if (n === ',' || n === ';' || n === '\\') { out += n; i++; continue; }
+      }
+      out += ch;
+    }
+    return out;
+  }
+
+  /* 'DTSTART;TZID=Asia/Seoul:20261123T160000' → { name, params, value } */
+  function icsLineParts(line) {
+    var inQuote = false, colonAt = -1;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line.charAt(i);
+      if (ch === '"') inQuote = !inQuote;
+      else if (ch === ':' && !inQuote) { colonAt = i; break; }
+    }
+    if (colonAt < 0) return null;
+    var head = line.slice(0, colonAt), value = line.slice(colonAt + 1);
+    var bits = head.split(';');
+    var name = String(bits.shift() || '').trim().toUpperCase();
+    if (!name) return null;
+    var params = {};
+    bits.forEach(function (b) {
+      var eq = b.indexOf('=');
+      if (eq < 0) return;
+      var key = b.slice(0, eq).trim().toUpperCase();
+      var val = b.slice(eq + 1).trim().replace(/^"|"$/g, '');
+      if (key) params[key] = val;
+    });
+    return { name: name, params: params, value: value };
+  }
+
+  /* 20261123T160000 / 20261123T070000Z / 20261123 → 한국 시간 기준 { y, mo, d, minutes, allDay }
+     끝에 Z 가 붙은 UTC 값은 +9시간 해 KST 로 옮긴다(날짜가 넘어갈 수 있음). */
+  function icsDateValue(value, params) {
+    var v = String(value == null ? '' : value).trim();
+    var allDay = String((params || {}).VALUE || '').toUpperCase() === 'DATE' || /^\d{8}$/.test(v);
+    var m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?)?(Z)?$/.exec(v);
+    if (!m) return null;
+    var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (allDay) return { y: y, mo: mo, d: d, minutes: null, allDay: true, utc: false };
+    var hh = m[4] ? Number(m[4]) : 0, mi = m[5] ? Number(m[5]) : 0;
+    if (m[7]) {
+      var u = new Date(Date.UTC(y, mo - 1, d, hh, mi, 0, 0) + 9 * 3600000);
+      return {
+        y: u.getUTCFullYear(), mo: u.getUTCMonth() + 1, d: u.getUTCDate(),
+        minutes: u.getUTCHours() * 60 + u.getUTCMinutes(), allDay: false, utc: true
+      };
+    }
+    return { y: y, mo: mo, d: d, minutes: hh * 60 + mi, allDay: false, utc: false };
+  }
+
+  /* 그 날짜의 요일 (월=1 … 일=7) */
+  function icsWeekday(y, mo, d) { return dayIndex(new Date(y, mo - 1, d)); }
+
+  /* 'FREQ=WEEKLY;BYDAY=MO,WE' → { FREQ:'WEEKLY', BYDAY:'MO,WE' } */
+  function icsRule(value) {
+    var rule = {};
+    String(value == null ? '' : value).split(';').forEach(function (part) {
+      var eq = part.indexOf('=');
+      if (eq < 0) return;
+      var k = part.slice(0, eq).trim().toUpperCase();
+      if (k) rule[k] = part.slice(eq + 1).trim().toUpperCase();
+    });
+    return rule;
+  }
+
+  var ICS_WEEKDAYS = { MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6, SU: 7 };
+
+  /* BYDAY → [1..7] ('-1SU', '2MO' 같은 값도 요일만 취한다) */
+  function icsRuleDays(rule) {
+    var out = [];
+    String((rule && rule.BYDAY) || '').split(',').forEach(function (token) {
+      var m = /(-?\d+)?(MO|TU|WE|TH|FR|SA|SU)/.exec(String(token || '').toUpperCase());
+      if (!m) return;
+      var idx = ICS_WEEKDAYS[m[2]];
+      if (idx && out.indexOf(idx) < 0) out.push(idx);
+    });
+    return out.sort(function (a, b) { return a - b; });
+  }
+
+  /* 'PT1H30M' → 90 */
+  function icsDurationMinutes(text) {
+    var m = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(String(text == null ? '' : text).trim().toUpperCase());
+    if (!m) return null;
+    var mins = Number(m[1] || 0) * 10080 + Number(m[2] || 0) * 1440 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
+    return mins > 0 ? mins : null;
+  }
+
+  /* RRULE:UNTIL 이 이미 지났는지 */
+  function icsUntilPassed(rule, now) {
+    if (!rule || !rule.UNTIL) return false;
+    var u = icsDateValue(rule.UNTIL, {});
+    if (!u) return false;
+    var end = new Date(u.y, u.mo - 1, u.d,
+      u.minutes == null ? 23 : Math.floor(u.minutes / 60),
+      u.minutes == null ? 59 : u.minutes % 60, 0, 0);
+    return end < now;
+  }
+
+  /* .ics 본문 → 학원 일정 후보
+     opt: { now, pastDays (기본 7), futureDays (기본 180), limit (기본 200) }
+     반환: { items, total, skippedHomeworks, skippedPast, duplicates, truncated }
+     item: { title, days, start, end, allDay, place, memo, kidHint, uid, recurring, date } */
+  function parseICS(text, opt) {
+    opt = opt || {};
+    var now = opt.now || new Date();
+    var pastDays = opt.pastDays == null ? 7 : Number(opt.pastDays);
+    var futureDays = opt.futureDays == null ? 180 : Number(opt.futureDays);
+    var limit = opt.limit == null ? 200 : Number(opt.limit);
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var earliest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - pastDays);
+    var latest = new Date(today.getFullYear(), today.getMonth(), today.getDate() + futureDays);
+
+    var lines = icsUnfold(text).split('\n');
+    var items = [];
+    var seen = {};
+    var result = { items: items, total: 0, skippedHomeworks: 0, skippedPast: 0, duplicates: 0, truncated: 0 };
+    var cur = null, inAlarm = 0;
+
+    function flush() {
+      if (!cur) return;
+      result.total += 1;
+      var ev = cur;
+      cur = null;
+      var st = ev.start;
+      if (!st || ev.status === 'CANCELLED' || ev.recurrenceId) return;
+
+      var summary = String(ev.summary || '').trim();
+      /* 이 앱이 내보낸 숙제 마감(.ics)은 학원 일정이 아니므로 건너뛴다 */
+      if (/^\[숙제\]/.test(summary) || /^hw-/.test(String(ev.uid || ''))) {
+        result.skippedHomeworks += 1;
+        return;
+      }
+
+      var title = summary, kidHint = '';
+      var head = /^\[([^\[\]]{1,12})\]\s*(.+)$/.exec(summary);
+      if (head) { kidHint = head[1].trim(); title = head[2].trim(); }
+      if (!title) title = '학원';
+      title = title.slice(0, 60);
+
+      var rule = ev.rrule || null;
+      var ruleDays = icsRuleDays(rule);
+      var weekly = !!(rule && String(rule.FREQ || '') === 'WEEKLY');
+      var recurring = weekly || ruleDays.length > 0;
+      if (weekly && icsUntilPassed(rule, now)) { result.skippedPast += 1; return; }
+
+      var when = new Date(st.y, st.mo - 1, st.d);
+      if (!recurring && (when < earliest || when > latest)) { result.skippedPast += 1; return; }
+
+      var days = ruleDays.length ? ruleDays : [icsWeekday(st.y, st.mo, st.d)];
+      var allDay = !!st.allDay;
+      var start = '', end = '';
+      if (!allDay) {
+        start = minutesToHHMM(st.minutes);
+        var endMin = ev.end && !ev.end.allDay ? ev.end.minutes : null;
+        if (endMin == null && ev.duration) {
+          var dur = icsDurationMinutes(ev.duration);
+          if (dur != null) endMin = st.minutes + dur;
+        }
+        if (endMin == null || endMin <= st.minutes) endMin = st.minutes + 60;
+        end = minutesToHHMM(endMin);
+      }
+
+      var place = String(ev.location || '').trim().slice(0, 40);
+      var memo = String(ev.description || '').trim();
+      /* 이 앱이 내보낸 DESCRIPTION(“아이 · 장소 · 메모”)을 원래대로 되살린다 */
+      if (memo && kidHint) {
+        var bits = memo.split(' · ');
+        if (String(bits[0] || '').trim() === kidHint) {
+          bits.shift();
+          /* 장소는 LOCATION 에서 읽고, 설명에 같은 값이 한 번 더 있으면 지운다 */
+          if (place && bits.length && String(bits[0]).trim() === place) bits.shift();
+          memo = bits.join(' · ').trim();
+        }
+      }
+      memo = memo.replace(/\s*\n\s*/g, ' · ').slice(0, 200);
+
+      var key = [title, days.join(','), start, end, kidHint].join('|');
+      if (seen[key]) { result.duplicates += 1; return; }
+      seen[key] = true;
+
+      if (items.length >= limit) { result.truncated += 1; return; }
+      items.push({
+        title: title,
+        days: days,
+        start: start,
+        end: end,
+        allDay: allDay,
+        place: place,
+        memo: memo,
+        kidHint: kidHint,
+        uid: String(ev.uid || ''),
+        recurring: recurring,
+        date: st.y + '-' + pad2(st.mo) + '-' + pad2(st.d)
+      });
+    }
+
+    lines.forEach(function (line) {
+      if (!line) return;
+      var p = icsLineParts(line);
+      if (!p) return;
+      var value = String(p.value || '').trim();
+      var upper = value.toUpperCase();
+      if (p.name === 'BEGIN') {
+        if (upper === 'VEVENT') { cur = {}; inAlarm = 0; }
+        else if (upper === 'VALARM' && cur) inAlarm += 1;
+        return;
+      }
+      if (p.name === 'END') {
+        if (upper === 'VALARM') { if (inAlarm > 0) inAlarm -= 1; return; }
+        if (upper === 'VEVENT') { flush(); cur = null; inAlarm = 0; }
+        return;
+      }
+      if (!cur || inAlarm) return; /* VALARM 의 SUMMARY·DESCRIPTION 은 일정 내용이 아니다 */
+      if (p.name === 'SUMMARY') cur.summary = icsUnescape(p.value);
+      else if (p.name === 'DESCRIPTION') cur.description = icsUnescape(p.value);
+      else if (p.name === 'LOCATION') cur.location = icsUnescape(p.value);
+      else if (p.name === 'DTSTART') cur.start = icsDateValue(p.value, p.params);
+      else if (p.name === 'DTEND') cur.end = icsDateValue(p.value, p.params);
+      else if (p.name === 'DURATION') cur.duration = value;
+      else if (p.name === 'RRULE') cur.rrule = icsRule(p.value);
+      else if (p.name === 'UID') cur.uid = value;
+      else if (p.name === 'STATUS') cur.status = upper;
+      else if (p.name === 'RECURRENCE-ID') cur.recurrenceId = value;
+    });
+    flush();
+
+    items.sort(function (a, b) {
+      if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
+      if (a.recurring) {
+        var da = a.days[0] || 0, db = b.days[0] || 0;
+        if (da !== db) return da - db;
+      } else if (a.date !== b.date) {
+        return a.date < b.date ? -1 : 1;
+      }
+      return (hhmmToMinutes(a.start) || 0) - (hhmmToMinutes(b.start) || 0);
+    });
+
+    return result;
+  }
+
+  /* 이미 있는 학원 일정과 겹치는 요일 찾기 (중복 건너뛰기용)
+     같은 아이·같은 이름·같은 시작/종료 시각일 때 요일이 겹치면 중복으로 본다. */
+  function classDuplicates(classes, cand) {
+    var days = (cand && cand.days ? cand.days : []).slice();
+    var out = { all: false, covered: [], rest: days.slice(), match: null };
+    var name = String((cand && cand.name) || '').trim();
+    (classes || []).forEach(function (c) {
+      if (!c) return;
+      if (String(c.kidId || '') !== String((cand && cand.kidId) || '')) return;
+      if (String(c.name || '').trim() !== name) return;
+      if (String(c.start || '') !== String((cand && cand.start) || '')) return;
+      if (String(c.end || '') !== String((cand && cand.end) || '')) return;
+      var hit = days.filter(function (d) { return (c.days || []).indexOf(d) >= 0; });
+      if (!hit.length) return;
+      out.match = out.match || c;
+      hit.forEach(function (d) { if (out.covered.indexOf(d) < 0) out.covered.push(d); });
+    });
+    out.covered.sort(function (a, b) { return a - b; });
+    out.rest = days.filter(function (d) { return out.covered.indexOf(d) < 0; });
+    out.all = days.length > 0 && out.rest.length === 0;
+    return out;
+  }
+
   var api = {
     DAY_LABELS: DAY_LABELS,
     DAY_LONGS: DAY_LONGS,
@@ -436,7 +719,18 @@
     isPinShape: isPinShape,
     icsEscape: icsEscape,
     foldLine: foldLine,
-    buildICS: buildICS
+    buildICS: buildICS,
+    icsUnfold: icsUnfold,
+    icsUnescape: icsUnescape,
+    icsLineParts: icsLineParts,
+    icsDateValue: icsDateValue,
+    icsWeekday: icsWeekday,
+    icsRule: icsRule,
+    icsRuleDays: icsRuleDays,
+    icsDurationMinutes: icsDurationMinutes,
+    icsUntilPassed: icsUntilPassed,
+    parseICS: parseICS,
+    classDuplicates: classDuplicates
   };
 
   global.AcademyLogic = api;
