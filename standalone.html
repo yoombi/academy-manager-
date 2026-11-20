@@ -1096,18 +1096,28 @@ body.grid-open { overflow: hidden; }
 .tt-scroll {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--line);
+  border: 1px solid var(--tt-line);
   border-radius: 12px;
   background: var(--surface);
 }
 
+/* 시간표 격자 — 폰 폭(360~430px)에서도 월~일이 한눈에 들어오는 압축 표 */
+.tt-scroll {
+  --tt-gutter: 42px;    /* 시간 열 너비 */
+  --tt-day-min: 40px;   /* 요일 한 칸 최소 너비 */
+  --row-h: 54px;        /* 1시간 행 높이 */
+  --tt-line: #cbd5e1;   /* 시간·요일 경계선 */
+  --tt-band: rgba(79, 70, 229, .04);  /* 짝수 시간대 옅은 띠 */
+}
 .tt {
-  --tt-gutter: 50px;
-  --row-h: 46px;
   display: grid;
   grid-template-columns: var(--tt-gutter) minmax(0, 1fr);
-  min-width: calc(var(--tt-gutter) + var(--days) * 62px);
+  min-width: calc(var(--tt-gutter) + var(--days) * var(--tt-day-min));
+  background: var(--surface);
 }
+
+/* 🔍 크게 보기 — 글자·칸을 키우고, 넘치면 옆으로 넘겨 본다 */
+.grid-overlay.is-zoom-big .tt-scroll { --tt-gutter: 54px; --tt-day-min: 70px; --row-h: 60px; }
 
 .tt-corner,
 .tt-allday-label {
@@ -1116,59 +1126,62 @@ body.grid-open { overflow: hidden; }
   z-index: 4;
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--tt-line);
 }
-.tt-corner { min-height: 34px; }
+.tt-corner { min-height: 34px; letter-spacing: -.03em; }
 .tt-allday-label { min-height: 30px; gap: 1px; }
-.tt-allday-label b { font-size: 11px; color: var(--text-2); }
-.tt-allday-label span { font-size: 9px; }
+.tt-allday-label b { font-size: 10.5px; color: var(--text-2); }
+.tt-allday-label span { font-size: 8.5px; }
 
-.tt-days { display: flex; border-bottom: 1px solid var(--line); }
+.tt-days,
+.tt-allday,
+.tt-cols { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); }
+
+.tt-days { border-bottom: 1px solid var(--tt-line); }
 .tt-dayhead {
-  flex: 1 1 0;
-  min-width: 62px;
+  min-width: 0;
   min-height: 34px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0;
-  padding: 3px 2px;
+  padding: 3px 1px;
   background: var(--surface-2);
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--tt-line);
 }
-.tt-dayhead b { font-size: 12.5px; font-weight: 800; }
-.tt-dayhead span { font-size: 9.5px; color: var(--muted); }
+.tt-dayhead b { font-size: 12.5px; font-weight: 850; letter-spacing: -.03em; line-height: 1.1; }
+.tt-dayhead span { font-size: 9px; color: var(--muted); line-height: 1.1; }
+.tt-dayhead.is-sat { background: color-mix(in srgb, #3b82f6 9%, var(--surface-2)); }
+.tt-dayhead.is-sun { background: color-mix(in srgb, #ef4444 9%, var(--surface-2)); }
 .tt-dayhead.is-today { background: var(--accent-soft); }
 .tt-dayhead.is-today b { color: var(--accent); }
 
-.tt-allday { display: flex; border-bottom: 1px solid var(--line); min-height: 30px; }
+.tt-allday { border-bottom: 1px solid var(--tt-line); min-height: 30px; }
 .tt-allday-cell {
-  flex: 1 1 0;
-  min-width: 62px;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
+  gap: 2px;
   align-content: center;
-  padding: 3px 4px;
-  border-left: 1px solid var(--line);
+  padding: 3px;
+  border-left: 1px solid var(--tt-line);
   background: var(--surface);
 }
-.tt-allday-cell.is-today { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.tt-allday-cell.is-today { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.tt-allday-cell.is-weekend { background: color-mix(in srgb, #94a3b8 8%, var(--surface)); }
 .tt-allday-chip {
   max-width: 100%;
-  padding: 3px 7px;
+  padding: 2px 5px;
   border-radius: 999px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--tt-line);
   background: var(--surface-2);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--text-2);
   overflow: hidden;
@@ -1183,86 +1196,127 @@ body.grid-open { overflow: hidden; }
   z-index: 3;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-right: 1px solid var(--line);
+  background: var(--surface-2);
 }
 .tt-hour {
   height: var(--row-h);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   justify-content: flex-start;
-  padding-top: 3px;
+  padding: 2px 4px 0 0;
   line-height: 1.1;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-bottom: 1px solid var(--tt-line);
+  background: var(--surface-2);
 }
-.tt-hour b { font-size: 10.5px; font-weight: 750; color: var(--text-2); }
-.tt-hour span { font-size: 8.5px; color: var(--muted); }
+.tt-hour b {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--text-2);
+  letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
+}
+.tt-hour span { display: none; font-size: 8.5px; color: var(--muted); }
+.grid-overlay.is-zoom-big .tt-hour { padding-top: 3px; }
+.grid-overlay.is-zoom-big .tt-hour b { font-size: 12px; }
+.grid-overlay.is-zoom-big .tt-hour span { display: block; }
 
+/* 시간대 경계 가로선 + 짝수 시간대 옅은 띠 (선을 먼저 그려 위에 오게) */
 .tt-cols {
-  display: flex;
+  position: relative;
   height: calc(var(--rows) * var(--row-h));
-  background-image: repeating-linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--line) 70%, transparent) 0 1px,
-    transparent 1px var(--row-h)
-  );
+  background-color: var(--surface);
+  background-image:
+    repeating-linear-gradient(to bottom, var(--tt-line) 0 1px, transparent 1px var(--row-h)),
+    repeating-linear-gradient(to bottom, var(--tt-band) 0 var(--row-h), transparent var(--row-h) calc(var(--row-h) * 2));
+  border-bottom: 1px solid var(--tt-line);
 }
 .tt-col {
   position: relative;
-  flex: 1 1 0;
-  min-width: 62px;
-  border-left: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  min-width: 0;
+  border-left: 1px solid var(--tt-line);
 }
-.tt-col.is-today { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.tt-col.is-weekend { background: color-mix(in srgb, #94a3b8 7%, transparent); }
+.tt-col.is-today { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
+/* 수업 블록 — 또렷한 테두리로 같은 날 연속·겹친 수업이 구분되게 */
 .tt-ev {
   position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 3px 4px;
+  gap: 0;
+  margin: 0;
+  padding: 2px 2px 2px 3px;
   border-radius: 7px;
-  border: 1px solid hsl(var(--h), 55%, 82%);
-  border-left: 3px solid hsl(var(--h), 55%, 62%);
-  background: hsl(var(--h), 72%, 94%);
-  color: #20232e;
+  border: 1px solid hsl(var(--h), 42%, 72%);
+  border-left: 2px solid hsl(var(--h), 58%, 58%);
+  background: hsl(var(--h), 76%, 96%);
+  color: #191c26;
   text-align: left;
   overflow: hidden;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(20, 24, 40, .06);
-}
-.tt-ev:active { filter: brightness(.97); }
-.tt-ev-name {
-  font-size: 11px;
-  font-weight: 800;
+  box-shadow: 0 1px 2px rgba(20, 24, 40, .10);
   line-height: 1.15;
-  letter-spacing: -.02em;
-  word-break: break-word;
 }
-.tt-ev-time { font-size: 9px; font-weight: 650; color: hsl(var(--h), 30%, 34%); }
+.tt-ev:active { filter: brightness(.96); }
+.tt-ev-name {
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.16;
+  letter-spacing: -.04em;
+  word-break: normal;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tt-ev-time {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 1px;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: hsl(var(--h), 34%, 32%);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.tt-ev-time > span { white-space: nowrap; }
 .tt-ev.is-compact .tt-ev-time { display: none; }
+
+.grid-overlay.is-zoom-big .tt-ev { padding: 3px 4px 3px 5px; border-radius: 8px; border-left-width: 3px; }
+.grid-overlay.is-zoom-big .tt-ev-name { font-size: 12px; -webkit-line-clamp: 3; }
+.grid-overlay.is-zoom-big .tt-ev-time { font-size: 10px; }
 
 @media (max-width: 520px) {
   .grid-hint { display: none; }
   .grid-top { padding-left: 12px; padding-right: 12px; }
-  .grid-body { padding: 10px 8px calc(20px + var(--safe-b)); }
-  .tt-block { padding: 10px 8px 8px; }
+  .grid-body { padding: 10px 6px calc(20px + var(--safe-b)); }
+  .tt-block { padding: 10px 6px 8px; }
+  /* 도구 줄은 줄바꿈 대신 옆으로 넘겨 표 공간을 지킨다 */
+  .grid-tools { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 3px; }
+  .grid-tools > * { flex: 0 0 auto; }
 }
 
 @media (min-width: 700px) {
-  .tt { --row-h: 50px; --tt-gutter: 56px; }
-  .tt-ev-name { font-size: 11.5px; }
+  .tt-scroll { --row-h: 58px; --tt-gutter: 52px; --tt-day-min: 56px; }
+  .tt-ev-name { font-size: 12px; }
+  .tt-ev-time { font-size: 9.5px; }
+  .tt-dayhead b { font-size: 13px; }
 }
 
 @media (prefers-color-scheme: dark) {
+  .tt-scroll { --tt-line: #394052; --tt-band: rgba(129, 140, 248, .07); }
   .tt-ev {
     background: hsl(var(--h), 32%, 25%);
-    border-color: hsl(var(--h), 30%, 34%);
-    border-left-color: hsl(var(--h), 55%, 62%);
+    border-color: hsl(var(--h), 28%, 36%);
+    border-left-color: hsl(var(--h), 60%, 64%);
     color: #eef0f7;
   }
-  .tt-ev-time { color: hsl(var(--h), 40%, 80%); }
+  .tt-ev-time { color: hsl(var(--h), 45%, 82%); }
+  .tt-dayhead.is-sat { background: color-mix(in srgb, #3b82f6 14%, var(--surface-2)); }
+  .tt-dayhead.is-sun { background: color-mix(in srgb, #ef4444 14%, var(--surface-2)); }
 }
 
 /* 인쇄·PDF: 표만 크게, 배경은 종이에 어울리게 */
@@ -1276,8 +1330,8 @@ body.grid-open { overflow: hidden; }
   .grid-body { overflow: visible; padding: 6px 0 0; }
   .grid-blocks { display: block; max-width: none; }
   .tt-block { break-inside: avoid; box-shadow: none; border-color: #bbb; margin-bottom: 8px; }
-  .tt-scroll { overflow: visible; border-color: #bbb; }
-  .tt { --row-h: 34px; min-width: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .tt-scroll { overflow: visible; border-color: #bbb; --tt-line: #b6bdcc; --tt-band: rgba(79, 70, 229, .05); }
+  .tt { --row-h: 36px; min-width: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .tt-ev { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .grid-close { display: none !important; }
 }
@@ -2282,7 +2336,7 @@ body.grid-open { overflow: hidden; }
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.5.0';
+  var APP_VERSION = '1.5.1';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -2314,7 +2368,7 @@ body.grid-open { overflow: hidden; }
   /* ================= 저장 ================= */
 
   function defaultSettings() {
-    return { notifyClass: true, classLeadMin: 30, notifyHomework: true, homeworkTime: '20:00' };
+    return { notifyClass: true, classLeadMin: 30, notifyHomework: true, homeworkTime: '20:00', gridZoom: 'fit' };
   }
 
   /* 관리자(엄마) 잠금 설정 — PIN 평문은 저장하지 않고 salt + 해시만 둔다 */
@@ -3082,15 +3136,24 @@ body.grid-open { overflow: hidden; }
   }
 
   function gridOpts() {
-    if (!state.grid) state.grid = { kid: state.kid === 'all' ? 'all' : state.kid, weekend: 'auto' };
+    if (!state.grid) {
+      state.grid = { kid: state.kid === 'all' ? 'all' : state.kid, weekend: 'auto', zoom: savedZoom() };
+    }
     if (state.grid.kid !== 'all' && !kidById(state.grid.kid)) state.grid.kid = 'all';
     if (['auto', 'always', 'never'].indexOf(state.grid.weekend) < 0) state.grid.weekend = 'auto';
+    if (['fit', 'big'].indexOf(state.grid.zoom) < 0) state.grid.zoom = savedZoom();
     return state.grid;
+  }
+
+  /* 표를 여는 방식(한눈에 맞추기 / 크게 보기)은 마지막에 고른 쪽으로 기억한다 */
+  function savedZoom() {
+    var z = state.data && state.data.settings ? state.data.settings.gridZoom : 'fit';
+    return z === 'big' ? 'big' : 'fit';
   }
 
   /* 보기 전용이라 잠금과 상관없이 바로 연다 (읽기는 막지 않는다) */
   function openGrid(kidId) {
-    state.grid = { kid: kidId || (state.kid === 'all' ? 'all' : state.kid), weekend: 'auto' };
+    state.grid = { kid: kidId || (state.kid === 'all' ? 'all' : state.kid), weekend: 'auto', zoom: savedZoom() };
     state.sheet = null;
     renderAll();
     try { window.scrollTo(0, 0); } catch (e) {}
@@ -3116,8 +3179,8 @@ body.grid-open { overflow: hidden; }
   function gridWeekText() {
     var dates = L.weekDates(new Date());
     var a = dates[0], b = dates[6];
-    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일(' + L.dayLabel(L.dayIndex(a)) + ') ~ ' +
-      (b.getMonth() + 1) + '월 ' + b.getDate() + '일(' + L.dayLabel(L.dayIndex(b)) + ')';
+    var tail = (a.getMonth() === b.getMonth() ? b.getDate() + '일' : (b.getMonth() + 1) + '월 ' + b.getDate() + '일');
+    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일(' + L.dayLabel(L.dayIndex(a)) + ') ~ ' + tail + '(' + L.dayLabel(L.dayIndex(b)) + ')';
   }
 
   function pctText(x) {
@@ -3137,13 +3200,15 @@ body.grid-open { overflow: hidden; }
   }
 
   function gridEventHtml(e) {
-    var style = '--h:' + e.hue + ';top:' + pctText(e.top) + ';height:' + pctText(e.height) +
+    /* 칸 경계선에 딱 붙지 않게 위아래·좌우로 2px씩 띄운다 */
+    var style = '--h:' + e.hue + ';top:calc(' + pctText(e.top) + ' + 2px);height:calc(' + pctText(e.height) + ' - 4px)' +
       ';left:calc(' + pctText(e.left) + ' + 2px);width:calc(' + pctText(e.width) + ' - 4px)';
     var tip = e.name + ' ' + e.timeText + (e.place ? ' · ' + e.place : '') + (e.memo ? ' · ' + e.memo : '');
+    var span = String(e.timeText).split('~');
     return '<button class="tt-ev' + (e.compact ? ' is-compact' : '') + '" type="button" style="' + style + '"' +
       ' data-action="edit-class" data-id="' + esc(e.id) + '" title="' + esc(tip) + '">' +
       '<span class="tt-ev-name">' + esc(e.name) + '</span>' +
-      '<span class="tt-ev-time">' + esc(e.timeText) + '</span>' +
+      '<span class="tt-ev-time"><span>' + esc(span[0]) + '</span><span>~' + esc(span[1] || '') + '</span></span>' +
       '</button>';
   }
 
@@ -3160,7 +3225,8 @@ body.grid-open { overflow: hidden; }
 
     var dayHeads = view.days.map(function (d) {
       var on = d === todayIdx;
-      return '<div class="tt-dayhead' + (on ? ' is-today' : '') + '"' + (on ? ' aria-current="date"' : '') + '>' +
+      return '<div class="tt-dayhead' + (d === 6 ? ' is-sat' : d === 7 ? ' is-sun' : '') + (on ? ' is-today' : '') + '"' +
+        (on ? ' aria-current="date"' : '') + '>' +
         '<b>' + L.dayLabel(d) + '</b><span>' + L.monthDay(dates[d - 1]) + '</span></div>';
     }).join('');
 
@@ -3169,7 +3235,7 @@ body.grid-open { overflow: hidden; }
         return '<button class="tt-allday-chip" type="button" data-action="edit-class" data-id="' + esc(e.id) + '"' +
           ' title="' + esc(e.name + (e.memo ? ' · ' + e.memo : '')) + '">' + esc(e.name) + '</button>';
       }).join('');
-      return '<div class="tt-allday-cell' + (d === todayIdx ? ' is-today' : '') + '">' + chips + '</div>';
+      return '<div class="tt-allday-cell' + (d > 5 ? ' is-weekend' : '') + (d === todayIdx ? ' is-today' : '') + '">' + chips + '</div>';
     }).join('');
 
     var hourLabels = view.rows.map(function (r) {
@@ -3178,7 +3244,7 @@ body.grid-open { overflow: hidden; }
 
     var cols = view.days.map(function (d) {
       var evs = view.events.filter(function (e) { return e.day === d; }).map(gridEventHtml).join('');
-      return '<div class="tt-col' + (d === todayIdx ? ' is-today' : '') + '">' + evs + '</div>';
+      return '<div class="tt-col' + (d > 5 ? ' is-weekend' : '') + (d === todayIdx ? ' is-today' : '') + '">' + evs + '</div>';
     }).join('');
 
     var tracks = view.rows.length
@@ -3217,7 +3283,7 @@ body.grid-open { overflow: hidden; }
         '<button class="btn primary" type="button" data-action="add-class">학원 등록하기</button></section>';
     }
 
-    return '<div class="grid-overlay" role="dialog" aria-modal="true" aria-label="주간 시간표 한눈에 보기">' +
+    return '<div class="grid-overlay' + (g.zoom === 'big' ? ' is-zoom-big' : '') + '" role="dialog" aria-modal="true" aria-label="주간 시간표 한눈에 보기">' +
       '<div class="grid-top">' +
       '<div class="grid-top-row">' +
       '<div class="grid-title-wrap"><h2 class="grid-title">📊 한눈에 보기</h2>' +
@@ -3229,6 +3295,8 @@ body.grid-open { overflow: hidden; }
       '<div class="grid-tools">' + gridKidChips() +
       '<button class="btn tiny ghost" type="button" data-action="grid-weekend">' +
       (weekendHidden ? '토·일 보기' : '토·일 숨기기') + '</button>' +
+      '<button class="btn tiny ghost" type="button" data-action="grid-zoom" aria-pressed="' + (g.zoom === 'big' ? 'true' : 'false') + '">' +
+      (g.zoom === 'big' ? '📱 한눈에 맞추기' : '🔍 크게 보기') + '</button>' +
       '<span class="grid-hint">' + (lockRequired() ? '🔒 칸을 누르면 보기 전용으로 열려요' : '칸을 누르면 일정을 볼 수 있어요') + '</span>' +
       '</div></div>' +
       '<div class="grid-body"><div class="grid-blocks">' + blocks + '</div></div></div>';
@@ -4446,6 +4514,12 @@ body.grid-open { overflow: hidden; }
         break;
       case 'grid-kid':
         gridOpts().kid = el.getAttribute('data-kid') || 'all';
+        renderAll();
+        break;
+      case 'grid-zoom':
+        var gZoom = gridOpts();
+        gZoom.zoom = gZoom.zoom === 'big' ? 'fit' : 'big';
+        if (state.data && state.data.settings) { state.data.settings.gridZoom = gZoom.zoom; save(); }
         renderAll();
         break;
       case 'grid-weekend':

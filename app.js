@@ -4,7 +4,7 @@
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.5.0';
+  var APP_VERSION = '1.5.1';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -36,7 +36,7 @@
   /* ================= 저장 ================= */
 
   function defaultSettings() {
-    return { notifyClass: true, classLeadMin: 30, notifyHomework: true, homeworkTime: '20:00' };
+    return { notifyClass: true, classLeadMin: 30, notifyHomework: true, homeworkTime: '20:00', gridZoom: 'fit' };
   }
 
   /* 관리자(엄마) 잠금 설정 — PIN 평문은 저장하지 않고 salt + 해시만 둔다 */
@@ -804,15 +804,24 @@
   }
 
   function gridOpts() {
-    if (!state.grid) state.grid = { kid: state.kid === 'all' ? 'all' : state.kid, weekend: 'auto' };
+    if (!state.grid) {
+      state.grid = { kid: state.kid === 'all' ? 'all' : state.kid, weekend: 'auto', zoom: savedZoom() };
+    }
     if (state.grid.kid !== 'all' && !kidById(state.grid.kid)) state.grid.kid = 'all';
     if (['auto', 'always', 'never'].indexOf(state.grid.weekend) < 0) state.grid.weekend = 'auto';
+    if (['fit', 'big'].indexOf(state.grid.zoom) < 0) state.grid.zoom = savedZoom();
     return state.grid;
+  }
+
+  /* 표를 여는 방식(한눈에 맞추기 / 크게 보기)은 마지막에 고른 쪽으로 기억한다 */
+  function savedZoom() {
+    var z = state.data && state.data.settings ? state.data.settings.gridZoom : 'fit';
+    return z === 'big' ? 'big' : 'fit';
   }
 
   /* 보기 전용이라 잠금과 상관없이 바로 연다 (읽기는 막지 않는다) */
   function openGrid(kidId) {
-    state.grid = { kid: kidId || (state.kid === 'all' ? 'all' : state.kid), weekend: 'auto' };
+    state.grid = { kid: kidId || (state.kid === 'all' ? 'all' : state.kid), weekend: 'auto', zoom: savedZoom() };
     state.sheet = null;
     renderAll();
     try { window.scrollTo(0, 0); } catch (e) {}
@@ -838,8 +847,8 @@
   function gridWeekText() {
     var dates = L.weekDates(new Date());
     var a = dates[0], b = dates[6];
-    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일(' + L.dayLabel(L.dayIndex(a)) + ') ~ ' +
-      (b.getMonth() + 1) + '월 ' + b.getDate() + '일(' + L.dayLabel(L.dayIndex(b)) + ')';
+    var tail = (a.getMonth() === b.getMonth() ? b.getDate() + '일' : (b.getMonth() + 1) + '월 ' + b.getDate() + '일');
+    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일(' + L.dayLabel(L.dayIndex(a)) + ') ~ ' + tail + '(' + L.dayLabel(L.dayIndex(b)) + ')';
   }
 
   function pctText(x) {
@@ -859,13 +868,15 @@
   }
 
   function gridEventHtml(e) {
-    var style = '--h:' + e.hue + ';top:' + pctText(e.top) + ';height:' + pctText(e.height) +
+    /* 칸 경계선에 딱 붙지 않게 위아래·좌우로 2px씩 띄운다 */
+    var style = '--h:' + e.hue + ';top:calc(' + pctText(e.top) + ' + 2px);height:calc(' + pctText(e.height) + ' - 4px)' +
       ';left:calc(' + pctText(e.left) + ' + 2px);width:calc(' + pctText(e.width) + ' - 4px)';
     var tip = e.name + ' ' + e.timeText + (e.place ? ' · ' + e.place : '') + (e.memo ? ' · ' + e.memo : '');
+    var span = String(e.timeText).split('~');
     return '<button class="tt-ev' + (e.compact ? ' is-compact' : '') + '" type="button" style="' + style + '"' +
       ' data-action="edit-class" data-id="' + esc(e.id) + '" title="' + esc(tip) + '">' +
       '<span class="tt-ev-name">' + esc(e.name) + '</span>' +
-      '<span class="tt-ev-time">' + esc(e.timeText) + '</span>' +
+      '<span class="tt-ev-time"><span>' + esc(span[0]) + '</span><span>~' + esc(span[1] || '') + '</span></span>' +
       '</button>';
   }
 
@@ -882,7 +893,8 @@
 
     var dayHeads = view.days.map(function (d) {
       var on = d === todayIdx;
-      return '<div class="tt-dayhead' + (on ? ' is-today' : '') + '"' + (on ? ' aria-current="date"' : '') + '>' +
+      return '<div class="tt-dayhead' + (d === 6 ? ' is-sat' : d === 7 ? ' is-sun' : '') + (on ? ' is-today' : '') + '"' +
+        (on ? ' aria-current="date"' : '') + '>' +
         '<b>' + L.dayLabel(d) + '</b><span>' + L.monthDay(dates[d - 1]) + '</span></div>';
     }).join('');
 
@@ -891,7 +903,7 @@
         return '<button class="tt-allday-chip" type="button" data-action="edit-class" data-id="' + esc(e.id) + '"' +
           ' title="' + esc(e.name + (e.memo ? ' · ' + e.memo : '')) + '">' + esc(e.name) + '</button>';
       }).join('');
-      return '<div class="tt-allday-cell' + (d === todayIdx ? ' is-today' : '') + '">' + chips + '</div>';
+      return '<div class="tt-allday-cell' + (d > 5 ? ' is-weekend' : '') + (d === todayIdx ? ' is-today' : '') + '">' + chips + '</div>';
     }).join('');
 
     var hourLabels = view.rows.map(function (r) {
@@ -900,7 +912,7 @@
 
     var cols = view.days.map(function (d) {
       var evs = view.events.filter(function (e) { return e.day === d; }).map(gridEventHtml).join('');
-      return '<div class="tt-col' + (d === todayIdx ? ' is-today' : '') + '">' + evs + '</div>';
+      return '<div class="tt-col' + (d > 5 ? ' is-weekend' : '') + (d === todayIdx ? ' is-today' : '') + '">' + evs + '</div>';
     }).join('');
 
     var tracks = view.rows.length
@@ -939,7 +951,7 @@
         '<button class="btn primary" type="button" data-action="add-class">학원 등록하기</button></section>';
     }
 
-    return '<div class="grid-overlay" role="dialog" aria-modal="true" aria-label="주간 시간표 한눈에 보기">' +
+    return '<div class="grid-overlay' + (g.zoom === 'big' ? ' is-zoom-big' : '') + '" role="dialog" aria-modal="true" aria-label="주간 시간표 한눈에 보기">' +
       '<div class="grid-top">' +
       '<div class="grid-top-row">' +
       '<div class="grid-title-wrap"><h2 class="grid-title">📊 한눈에 보기</h2>' +
@@ -951,6 +963,8 @@
       '<div class="grid-tools">' + gridKidChips() +
       '<button class="btn tiny ghost" type="button" data-action="grid-weekend">' +
       (weekendHidden ? '토·일 보기' : '토·일 숨기기') + '</button>' +
+      '<button class="btn tiny ghost" type="button" data-action="grid-zoom" aria-pressed="' + (g.zoom === 'big' ? 'true' : 'false') + '">' +
+      (g.zoom === 'big' ? '📱 한눈에 맞추기' : '🔍 크게 보기') + '</button>' +
       '<span class="grid-hint">' + (lockRequired() ? '🔒 칸을 누르면 보기 전용으로 열려요' : '칸을 누르면 일정을 볼 수 있어요') + '</span>' +
       '</div></div>' +
       '<div class="grid-body"><div class="grid-blocks">' + blocks + '</div></div></div>';
@@ -2168,6 +2182,12 @@
         break;
       case 'grid-kid':
         gridOpts().kid = el.getAttribute('data-kid') || 'all';
+        renderAll();
+        break;
+      case 'grid-zoom':
+        var gZoom = gridOpts();
+        gZoom.zoom = gZoom.zoom === 'big' ? 'fit' : 'big';
+        if (state.data && state.data.settings) { state.data.settings.gridZoom = gZoom.zoom; save(); }
         renderAll();
         break;
       case 'grid-weekend':
