@@ -880,6 +880,16 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .ics-sheet { max-width: 560px; }
 .ics-sheet .card-desc { margin-bottom: 4px; }
 .ics-sheet .row-note { padding: 4px 0 10px; }
+.ics-guide {
+  margin: 2px 0 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ics-guide b { color: var(--text-2); font-size: 11.5px; font-weight: 750; }
 .ics-list-head {
   display: flex;
   align-items: center;

@@ -1249,7 +1249,10 @@
       '<div class="handle" aria-hidden="true"></div>' +
       '<h2 class="sheet-title">📅 캘린더에서 불러오기</h2>' +
       '<p class="card-desc">' + esc(s.fileName) + ' 에서 일정 ' + items.length + '개를 찾았어요. 시간표에 넣을 일정만 골라 주세요.</p>' +
-      '<p class="row-note">구글 캘린더 웹 → ⚙️ 설정 → 가져오기 및 내보내기 → 내보내기 로 받은 .ics 파일을 쓰면 돼요. (압축(zip)으로 받았다면 풀어서 .ics 파일을 고르세요.)</p>' +
+      '<p class="ics-guide"><b>구글 캘린더에서 .ics 받는 3단계</b><br>' +
+      '① 구글 캘린더 웹 → ⚙️ 설정<br>' +
+      '② 가져오기 및 내보내기 → 내보내기<br>' +
+      '③ 내려받은 .ics 파일을 여기서 고르기 (zip 이면 풀어서)</p>' +
       kidBlock +
       (hinted ? '<p class="hint-line">이름표 “[아이 이름]”가 붙은 일정은 그 아이에게 들어가요.</p>' : '') +
       notes +
