@@ -1177,11 +1177,11 @@ body.grid-open { overflow: hidden; }
 .tt-allday-cell.is-weekend { background: color-mix(in srgb, #94a3b8 8%, var(--surface)); }
 .tt-allday-chip {
   max-width: 100%;
-  padding: 2px 5px;
+  padding: 1px 4px;
   border-radius: 999px;
   border: 1px solid var(--tt-line);
   background: var(--surface-2);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
   color: var(--text-2);
   overflow: hidden;
@@ -1235,6 +1235,8 @@ body.grid-open { overflow: hidden; }
   position: relative;
   min-width: 0;
   border-left: 1px solid var(--tt-line);
+  /* 색을 칠한 칸(오늘·주말)에서도 시간대 가로선이 지워지지 않게 같은 선을 한 번 더 */
+  background-image: repeating-linear-gradient(to bottom, var(--tt-line) 0 1px, transparent 1px var(--row-h));
 }
 .tt-col.is-weekend { background: color-mix(in srgb, #94a3b8 7%, transparent); }
 .tt-col.is-today { background: color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -1246,7 +1248,7 @@ body.grid-open { overflow: hidden; }
   flex-direction: column;
   gap: 0;
   margin: 0;
-  padding: 2px 2px 2px 3px;
+  padding: 1px 2px 1px 3px;
   border-radius: 7px;
   border: 1px solid hsl(var(--h), 42%, 72%);
   border-left: 2px solid hsl(var(--h), 58%, 58%);
@@ -1260,10 +1262,10 @@ body.grid-open { overflow: hidden; }
 }
 .tt-ev:active { filter: brightness(.96); }
 .tt-ev-name {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 800;
-  line-height: 1.16;
-  letter-spacing: -.04em;
+  line-height: 1.2;
+  letter-spacing: -.05em;
   word-break: normal;
   overflow-wrap: break-word;
   display: -webkit-box;
@@ -1294,9 +1296,10 @@ body.grid-open { overflow: hidden; }
   .grid-top { padding-left: 12px; padding-right: 12px; }
   .grid-body { padding: 10px 6px calc(20px + var(--safe-b)); }
   .tt-block { padding: 10px 6px 8px; }
-  /* 도구 줄은 줄바꿈 대신 옆으로 넘겨 표 공간을 지킨다 */
-  .grid-tools { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 3px; }
-  .grid-tools > * { flex: 0 0 auto; }
+  /* 도구 줄: 아이 칩은 한 줄을 다 쓰고, 나머지 버튼은 아래 줄에 (잘리지 않게) */
+  .grid-tools { flex-wrap: wrap; }
+  .grid-tools .seg { flex: 1 1 100%; scrollbar-width: none; }
+  .grid-tools .seg::-webkit-scrollbar { display: none; }
 }
 
 @media (min-width: 700px) {
