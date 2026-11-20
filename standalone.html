@@ -1096,6 +1096,7 @@ body.grid-open { overflow: hidden; }
 .tt-scroll {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
   border: 1px solid var(--tt-line);
   border-radius: 12px;
   background: var(--surface);
@@ -1338,6 +1339,7 @@ body.grid-open { overflow: hidden; }
   .tt-block { break-inside: avoid; box-shadow: none; border-color: #bbb; margin-bottom: 8px; }
   .tt-scroll { overflow: visible; border-color: #bbb; --tt-line: #b6bdcc; --tt-band: rgba(79, 70, 229, .05); }
   .tt { --row-h: 36px; min-width: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .tt-cols, .tt-col { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .tt-ev { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .grid-close { display: none !important; }
 }
