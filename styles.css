@@ -1230,6 +1230,13 @@ body.grid-open { overflow: hidden; }
 .tt-ev-time { font-size: 9px; font-weight: 650; color: hsl(var(--h), 30%, 34%); }
 .tt-ev.is-compact .tt-ev-time { display: none; }
 
+@media (max-width: 520px) {
+  .grid-hint { display: none; }
+  .grid-top { padding-left: 12px; padding-right: 12px; }
+  .grid-body { padding: 10px 8px calc(20px + var(--safe-b)); }
+  .tt-block { padding: 10px 8px 8px; }
+}
+
 @media (min-width: 700px) {
   .tt { --row-h: 50px; --tt-gutter: 56px; }
   .tt-ev-name { font-size: 11.5px; }
