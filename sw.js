@@ -1,7 +1,7 @@
-/* 아이별 학원·숙제 관리 — 오프라인 캐시 서비스워커
+/* 엄마다했쏙 — 오프라인 캐시 서비스워커
    · 앱 파일(html/js/css)은 네트워크 우선: 새 버전이 바로 반영됩니다.
    · 그 밖의 자산(아이콘 등)은 캐시 우선: 오프라인·느린 회선에서도 빠르게 뜹니다. */
-const CACHE = 'academy-manager-v4';
+const CACHE = 'academy-manager-v5';
 const ASSETS = [
   './index.html',
   './styles.css',

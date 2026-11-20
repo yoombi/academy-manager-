@@ -1,7 +1,7 @@
 {
-  "name": "아이별 학원·숙제 관리",
-  "short_name": "아이별 학원",
-  "description": "아이별 학원 시간표와 숙제·학습 체크리스트를 한 곳에서 관리하는 앱",
+  "name": "엄마다했쏙",
+  "short_name": "다했쏙",
+  "description": "아이 학원 시간표와 숙제·학습 체크리스트를 한 곳에서 관리하는 앱",
   "lang": "ko",
   "dir": "ltr",
   "start_url": "./index.html",

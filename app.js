@@ -1,10 +1,10 @@
-/* 아이별 학원·숙제 관리 — 화면/상태 (모든 데이터는 localStorage 에 저장) */
+/* 엄마다했쏙 — 화면/상태 (모든 데이터는 localStorage 에 저장) */
 (function () {
   'use strict';
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.2.0';
+  var APP_VERSION = '1.3.0';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -568,7 +568,7 @@
   function onboardingCard() {
     return '<section class="card intro">' +
       '<div class="intro-emoji" aria-hidden="true">📚</div>' +
-      '<h2>아이별 학원·숙제 관리</h2>' +
+      '<h2>엄마다했쏙</h2>' +
       '<p>아이를 등록하면 학원 시간표와 매일 체크리스트를 한 화면에서 볼 수 있어요. 입력한 내용은 이 휴대폰에만 저장됩니다.</p>' +
       '<ol class="steps">' +
       '<li><b>1</b><span>아이 추가 (이름·색상)</span></li>' +
@@ -928,7 +928,7 @@
         '<p class="card-desc muted">인터넷 주소(https)로 열었을 때 설치 버튼이 나타나요. 파일로 열어도 사용할 수 있습니다.</p>') +
       '</section>' +
 
-      '<p class="footnote">아이별 학원·숙제 관리 v' + APP_VERSION + ' · 데이터는 이 기기에만 저장됩니다.</p>';
+      '<p class="footnote">엄마다했쏙 v' + APP_VERSION + ' · 데이터는 이 기기에만 저장됩니다.</p>';
   }
 
   function settingToggle(key, label, on) {
@@ -1524,7 +1524,7 @@
 
   function exportJSON() {
     var payload = { app: 'academy-manager', version: 1, exportedAt: new Date().toISOString(), data: state.data };
-    if (download(JSON.stringify(payload, null, 2), '아이별-백업-' + L.dateKey(new Date()) + '.json', 'application/json;charset=utf-8')) {
+    if (download(JSON.stringify(payload, null, 2), '엄마다했쏙-백업-' + L.dateKey(new Date()) + '.json', 'application/json;charset=utf-8')) {
       toast('백업 파일을 저장했어요');
     }
   }
@@ -1573,9 +1573,9 @@
       homeworks: only === 'classes' ? [] : works,
       now: now,
       alarmMinutes: state.data.settings.notifyClass ? state.data.settings.classLeadMin : 0,
-      calendarName: '아이별 학원 일정 (' + scopeName + ')'
+      calendarName: '엄마다했쏙 일정 (' + scopeName + ')'
     });
-    if (download(ics, '아이별-' + label + '-' + L.dateKey(now) + '.ics', 'text/calendar;charset=utf-8')) {
+    if (download(ics, '엄마다했쏙-' + label + '-' + L.dateKey(now) + '.ics', 'text/calendar;charset=utf-8')) {
       toast('.ics 파일을 저장했어요. 파일을 눌러 캘린더에 추가하세요.');
     }
   }

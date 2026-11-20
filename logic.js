@@ -1,4 +1,4 @@
-/* 아이별 학원·숙제 관리 — 공용 로직 (DOM 없이 동작, node/테스트에서도 사용) */
+/* 엄마다했쏙 — 공용 로직 (DOM 없이 동작, node/테스트에서도 사용) */
 (function (global) {
   'use strict';
 
@@ -332,10 +332,10 @@
 
     lines.push('BEGIN:VCALENDAR');
     lines.push('VERSION:2.0');
-    lines.push('PRODID:-//아이별 학원 숙제 관리//KO');
+    lines.push('PRODID:-//엄마다했쏙//KO');
     lines.push('CALSCALE:GREGORIAN');
     lines.push('METHOD:PUBLISH');
-    lines.push('X-WR-CALNAME:' + icsEscape(opt.calendarName || '아이별 학원 일정'));
+    lines.push('X-WR-CALNAME:' + icsEscape(opt.calendarName || '엄마다했쏙 일정'));
     lines.push('X-WR-TIMEZONE:Asia/Seoul');
 
     if (opt.includeClasses !== false) {
