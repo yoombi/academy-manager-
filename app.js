@@ -4,7 +4,7 @@
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.1.0';
+  var APP_VERSION = '1.2.0';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -23,13 +23,39 @@
     sheet: null,
     dayKey: null,
     installEvent: null,
-    swReg: null
+    swReg: null,
+    /* 관리자 잠금: 해제 상태는 이번 화면(세션)에서만 유지되고 새로고침하면 다시 잠긴다 */
+    unlocked: false,
+    pinFails: 0,
+    pinBlockUntil: 0,
+    lastActivity: 0
   };
 
   /* ================= 저장 ================= */
 
   function defaultSettings() {
     return { notifyClass: true, classLeadMin: 30, notifyHomework: true, homeworkTime: '20:00' };
+  }
+
+  /* 관리자(엄마) 잠금 설정 — PIN 평문은 저장하지 않고 salt + 해시만 둔다 */
+  function blankLock() {
+    return { hash: '', salt: '', autoLockMin: 5, updatedAt: null };
+  }
+
+  function normalizeLock(raw) {
+    var lock = blankLock();
+    if (!raw || typeof raw !== 'object') return lock;
+    var hash = typeof raw.hash === 'string' ? raw.hash.trim().toLowerCase() : '';
+    var salt = typeof raw.salt === 'string' ? raw.salt.trim() : '';
+    /* 해시가 온전한 64자리 16진수일 때만 잠금으로 인정 (깨진 값이면 잠기지 않게) */
+    if (/^[0-9a-f]{64}$/.test(hash) && salt) {
+      lock.hash = hash;
+      lock.salt = salt;
+    }
+    var mins = Number(raw.autoLockMin);
+    if ([1, 5, 10, 30, 0].indexOf(mins) >= 0) lock.autoLockMin = mins;
+    lock.updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : null;
+    return lock;
   }
 
   function blankData() {
@@ -41,6 +67,7 @@
       homeworks: [],
       checks: {},
       settings: defaultSettings(),
+      lock: blankLock(),
       fired: {},
       createdAt: new Date().toISOString()
     };
@@ -96,6 +123,8 @@
       });
     d.checks = raw && raw.checks && typeof raw.checks === 'object' ? raw.checks : {};
     d.settings = Object.assign(defaultSettings(), raw && raw.settings ? raw.settings : {});
+    /* 예전 백업(lock 없음)도 그대로 열린다 — 잠금 없음으로 채운다 */
+    d.lock = normalizeLock(raw && raw.lock);
     d.fired = raw && raw.fired && typeof raw.fired === 'object' ? raw.fired : {};
     return d;
   }
@@ -122,6 +151,115 @@
 
   function uid(prefix) {
     return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  /* ================= 관리자(엄마) 잠금 ================= */
+
+  function lockInfo() {
+    if (!state.data || !state.data.lock) return blankLock();
+    return state.data.lock;
+  }
+
+  function hasPin() { return !!lockInfo().hash; }
+
+  /* 잠금이 걸려 있고 아직 풀지 않은 상태 = 수정·설정 불가 */
+  function lockRequired() { return hasPin() && !state.unlocked; }
+
+  function markActivity() { state.lastActivity = Date.now(); }
+
+  function lockNow(silent) {
+    if (!hasPin()) return false;
+    state.unlocked = false;
+    state.sheet = null;
+    if (!silent) toast('관리자 잠금을 다시 걸었어요');
+    return true;
+  }
+
+  function unlockSession() {
+    state.unlocked = true;
+    state.pinFails = 0;
+    state.pinBlockUntil = 0;
+    markActivity();
+  }
+
+  /* 비밀번호 설정·변경 (해시만 저장) */
+  function setPin(pin, autoLockMin) {
+    if (!L.isPinShape(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
+    var salt = L.randomSalt();
+    var mins = autoLockMin == null ? lockInfo().autoLockMin : Number(autoLockMin);
+    if ([1, 5, 10, 30, 0].indexOf(mins) < 0) mins = 5;
+    state.data.lock = {
+      hash: L.pinHash(pin, salt),
+      salt: salt,
+      autoLockMin: mins,
+      updatedAt: new Date().toISOString()
+    };
+    save();
+    unlockSession();
+    return { ok: true };
+  }
+
+  /* 비밀번호 삭제 = 잠금 끄기 (잠금이 풀린 상태에서만 가능) */
+  function clearPin() {
+    state.data.lock = Object.assign(blankLock(), { autoLockMin: lockInfo().autoLockMin });
+    save();
+    unlockSession();
+    return { ok: true };
+  }
+
+  function setLockAutoMin(mins) {
+    var m = Number(mins);
+    if ([1, 5, 10, 30, 0].indexOf(m) < 0) return;
+    state.data.lock = Object.assign(blankLock(), lockInfo(), { autoLockMin: m });
+    save();
+  }
+
+  /* 입력한 PIN 확인. 5번 틀리면 30초 동안 막는다 */
+  function verifyPin(pin) {
+    var lock = lockInfo();
+    if (!lock.hash) { unlockSession(); return true; }
+    var now = Date.now();
+    if (state.pinBlockUntil > now) return false;
+    if (L.pinHash(String(pin == null ? '' : pin), lock.salt) === lock.hash) {
+      unlockSession();
+      return true;
+    }
+    state.pinFails += 1;
+    if (state.pinFails >= 5) {
+      state.pinFails = 0;
+      state.pinBlockUntil = now + 30000;
+    }
+    return false;
+  }
+
+  /* 일정 시간 손을 대지 않으면 다시 잠근다 (0 이면 자동 잠금 없음) */
+  function autoLockCheck() {
+    if (!hasPin() || !state.unlocked) return false;
+    var mins = Number(lockInfo().autoLockMin);
+    if (!(mins > 0)) return false;
+    if (Date.now() - state.lastActivity < mins * 60000) return false;
+    state.unlocked = false;
+    state.sheet = null;
+    renderAll();
+    toast('오랫동안 그대로 있어서 관리자 잠금을 다시 걸었어요');
+    return true;
+  }
+
+  /* 잠금이 걸려 있으면 PIN 시트를 먼저 띄운다 */
+  function guardEdit(run) {
+    if (!lockRequired()) { run(); return true; }
+    openPinSheet('unlock', run);
+    return false;
+  }
+
+  /* 항목 보기: 잠긴 상태면 읽기 전용 시트로 */
+  function openItemSheet(type, id) {
+    state.sheet = { type: type, id: id || null, readOnly: lockRequired() };
+    renderAll();
+    if (state.sheet && !state.sheet.readOnly) {
+      var input = document.querySelector('.sheet input, .sheet select');
+      if (input && input.focus) setTimeout(function () { try { input.focus(); } catch (e) {} }, 80);
+    }
   }
 
   /* ================= 조회 ================= */
@@ -415,6 +553,8 @@
 
   function renderMain() {
     if (state.kid !== 'all' && !kidById(state.kid)) state.kid = 'all';
+    /* 잠겨 있으면 설정 화면은 안내 카드로 막는다 (해시·새로고침·hash 링크로 바로 들어와도 동일) */
+    if (state.view === 'settings' && lockRequired()) return lockedCard();
     if (!state.data.kids.length) {
       /* 아이가 없어도 설정(백업 복원 등)은 열 수 있어야 한다 */
       return state.view === 'settings' ? viewSettings() : onboardingCard();
@@ -675,12 +815,65 @@
 
   /* ---------- 설정 ---------- */
 
+  /* 설정 맨 위: 관리자(엄마) 비밀번호 카드 */
+  function lockCard() {
+    var lock = lockInfo();
+    var on = !!lock.hash;
+    var stateText = !on ? '아직 없음' : (state.unlocked ? '풀림' : '잠김');
+    var autoOpts = [
+      { v: 1, t: '1분' }, { v: 5, t: '5분' }, { v: 10, t: '10분' }, { v: 30, t: '30분' }, { v: 0, t: '자동 잠금 없음' }
+    ];
+
+    var actions = on
+      ? '<div class="btn-row">' +
+        (state.unlocked
+          ? '<button class="btn ghost" data-action="lock-now">지금 잠그기</button>'
+          : '<button class="btn primary" data-action="lock-unlock">비밀번호 입력</button>') +
+        '<button class="btn ghost" data-action="lock-set">비밀번호 변경</button>' +
+        '</div>' +
+        '<div class="btn-row"><button class="btn ghost danger" data-action="lock-off">비밀번호 삭제</button></div>'
+      : '<button class="btn primary block" data-action="lock-set">비밀번호 설정</button>';
+
+    return '<section class="card lock-card">' +
+      '<header class="card-head"><h2>🔒 관리자(엄마) 비밀번호</h2><span class="pill' + (on && !state.unlocked ? ' pill-live' : '') + '">' + stateText + '</span></header>' +
+      '<p class="card-desc">' + (on
+        ? '비밀번호를 켜 두면 아이는 체크리스트·오늘의 학원·시간표를 그대로 볼 수 있지만, 일정·할 일·설정은 바꿀 수 없어요. 화면을 새로고침하거나 ' +
+          '일정 시간 손을 대지 않으면 다시 잠깁니다.'
+        : '아이가 일정을 함부로 바꾸지 않도록 4자리 숫자 비밀번호로 잠글 수 있어요. 체크와 보기는 잠그지 않아도 그대로 쓸 수 있어요.') + '</p>' +
+      (on
+        ? '<div class="setting"><span class="setting-label">자동 잠금</span>' +
+          '<select class="select" data-locksetting="autoLockMin" aria-label="자동 잠금 시간">' +
+          autoOpts.map(function (o) {
+            return '<option value="' + o.v + '"' + (Number(lock.autoLockMin) === o.v ? ' selected' : '') + '>' + o.t + '</option>';
+          }).join('') + '</select></div>'
+        : '') +
+      '<div class="lock-actions">' + actions + '</div>' +
+      (on && lock.updatedAt
+        ? '<p class="hint-line">마지막 변경: ' + esc(String(lock.updatedAt).slice(0, 10)) + ' · 비밀번호는 이 기기에만(해시로) 저장돼요.</p>'
+        : '') +
+      '</section>';
+  }
+
+  /* 잠긴 상태에서 설정 화면 대신 보여 주는 안내 */
+  function lockedCard() {
+    return '<section class="card intro lock-gate">' +
+      '<div class="intro-emoji" aria-hidden="true">🔒</div>' +
+      '<h2>관리자 잠금 상태예요</h2>' +
+      '<p>설정을 바꾸려면 4자리 비밀번호를 입력해 주세요. 아이는 오늘의 학원·시간표·체크리스트를 그대로 볼 수 있어요.</p>' +
+      '<div class="intro-actions">' +
+      '<button class="btn primary block" data-action="lock-unlock">비밀번호 입력</button>' +
+      '<button class="btn ghost block" data-action="import-json">백업 불러오기</button>' +
+      '<button class="btn ghost block" data-action="pin-forgot">비밀번호를 잊었어요</button>' +
+      '</div></section>';
+  }
+
   function viewSettings() {
     var s = state.data.settings;
     var perm = notificationPermission();
     var permText = perm === 'granted' ? '허용됨' : perm === 'denied' ? '차단됨' : perm === 'unsupported' ? '지원 안 함' : '아직 허용 안 됨';
 
-    return '<section class="card">' +
+    return lockCard() +
+      '<section class="card">' +
       '<header class="card-head"><h2>알림</h2><span class="pill">' + permText + '</span></header>' +
       (perm === 'granted' ? '' : '<div class="row-note">' +
         (perm === 'denied' ? '브라우저 설정에서 이 사이트의 알림을 허용해 주세요.'
@@ -769,25 +962,36 @@
     }
     document.body.classList.add('sheet-open');
     var t = state.sheet.type;
-    if (t === 'kid') root.innerHTML = sheetKid(state.sheet.id);
+    if (t === 'pin') root.innerHTML = sheetPin();
+    else if (t === 'kid') root.innerHTML = sheetKid(state.sheet.id);
     else if (t === 'class') root.innerHTML = sheetClass(state.sheet.id);
     else if (t === 'routine') root.innerHTML = sheetRoutine(state.sheet.id);
     else root.innerHTML = sheetHomework(state.sheet.id);
   }
 
+  function sheetReadOnly() { return !!(state.sheet && state.sheet.readOnly); }
+
   function sheetShell(type, title, body, id) {
+    var ro = sheetReadOnly();
     return '<div class="sheet-wrap" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">' +
       '<div class="backdrop" data-action="close-sheet"></div>' +
       '<form class="sheet" data-type="' + type + '" novalidate>' +
       '<div class="handle" aria-hidden="true"></div>' +
-      '<h2 class="sheet-title">' + title + '</h2>' +
-      body +
+      '<h2 class="sheet-title">' + title + (ro ? ' <span class="pill">보기 전용</span>' : '') + '</h2>' +
+      '<fieldset class="sheet-fieldset"' + (ro ? ' disabled' : '') + '>' + body + '</fieldset>' +
       '<p class="form-err" role="alert"></p>' +
-      '<div class="sheet-actions">' +
-      (id ? '<button type="button" class="btn ghost danger" data-action="delete-item">삭제</button>' : '') +
-      '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
-      '<button type="submit" class="btn primary">저장</button>' +
-      '</div></form></div>';
+      (ro
+        ? '<div class="row-note locked-note">🔒 보기 전용이에요. 일정을 고치려면 관리자 비밀번호가 필요해요.</div>' +
+          '<div class="sheet-actions">' +
+          '<button type="button" class="btn ghost" data-action="close-sheet">닫기</button>' +
+          '<button type="button" class="btn primary" data-action="unlock-edit">비밀번호 입력하고 수정</button>' +
+          '</div>'
+        : '<div class="sheet-actions">' +
+          (id ? '<button type="button" class="btn ghost danger" data-action="delete-item">삭제</button>' : '') +
+          '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
+          '<button type="submit" class="btn primary">저장</button>' +
+          '</div>') +
+      '</form></div>';
   }
 
   function chipGroup(name, values, selected, multi) {
@@ -887,7 +1091,139 @@
     return sheetShell('homework', (id ? '숙제 수정' : '숙제 추가'), body, id);
   }
 
-  /* ================= 렌더 ================= */
+  /* ---------- 관리자 비밀번호(PIN) 입력 ---------- */
+
+  function openPinSheet(mode, after) {
+    state.sheet = {
+      type: 'pin',
+      mode: mode === 'set' ? 'set' : 'unlock',
+      stage: mode === 'set' ? 'new' : 'unlock',
+      buf: '',
+      first: '',
+      err: '',
+      help: false,
+      after: typeof after === 'function' ? after : null
+    };
+    renderAll();
+  }
+
+  function pinDots(buf) {
+    var out = '';
+    for (var i = 0; i < 4; i++) out += '<span class="pin-dot' + (i < buf.length ? ' on' : '') + '"></span>';
+    return '<div class="pin-dots" aria-label="' + buf.length + '자리 입력됨">' + out + '</div>';
+  }
+
+  function pinPad() {
+    var keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'blank', '0', 'del'];
+    return '<div class="pin-pad">' + keys.map(function (k) {
+      if (k === 'blank') return '<span class="pin-key pin-key-blank" aria-hidden="true"></span>';
+      if (k === 'del') return '<button type="button" class="pin-key pin-key-fn" data-action="pin-key" data-key="del" aria-label="지우기">⌫</button>';
+      return '<button type="button" class="pin-key" data-action="pin-key" data-key="' + k + '">' + k + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function sheetPin() {
+    var s = state.sheet;
+    var setMode = s.mode === 'set';
+    var confirming = setMode && s.stage === 'confirm';
+    var title = setMode
+      ? (confirming ? '비밀번호 한 번 더' : (hasPin() ? '새 관리자 비밀번호' : '관리자 비밀번호 만들기'))
+      : '관리자 비밀번호 입력';
+    var desc = setMode
+      ? (confirming ? '같은 4자리 숫자를 한 번 더 눌러 주세요.'
+        : '아이가 함부로 바꾸지 않도록 잠글 4자리 숫자를 정해 주세요. (예: 기억하기 쉬운 생일·기념일)')
+      : '설정이나 일정을 고치려면 4자리 비밀번호를 입력해 주세요.';
+    var blockLeft = Math.ceil(Math.max(0, state.pinBlockUntil - Date.now()) / 1000);
+
+    return '<div class="sheet-wrap" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">' +
+      '<div class="backdrop" data-action="close-sheet"></div>' +
+      '<div class="sheet pin-sheet">' +
+      '<div class="handle" aria-hidden="true"></div>' +
+      '<h2 class="sheet-title">🔒 ' + title + '</h2>' +
+      '<p class="card-desc">' + desc + '</p>' +
+      pinDots(s.buf) +
+      '<p class="pin-err' + (s.err ? ' show' : '') + '" role="alert">' + esc(s.err || '') + '</p>' +
+      '<p class="pin-wait' + (blockLeft > 0 ? ' show' : '') + '">' + (blockLeft > 0 ? blockLeft + '초 뒤에 다시 시도할 수 있어요.' : '') + '</p>' +
+      pinPad() +
+      '<div class="sheet-actions">' +
+      '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
+      (setMode && confirming
+        ? '<button type="button" class="btn ghost" data-action="pin-restart">처음부터</button>'
+        : '<button type="button" class="btn ghost" data-action="pin-forgot">비밀번호를 잊었어요</button>') +
+      '</div>' +
+      (s.help
+        ? '<div class="pin-help">' +
+          '<p>비밀번호는 이 기기에 해시로만 저장돼서 찾아낼 수 없어요. 잊었다면 <b>이 기기의 앱 데이터를 초기화</b>한 뒤, 미리 저장해 둔 백업 파일을 불러와 주세요. (백업을 불러오면 잠금이 풀린 상태로 시작합니다.)</p>' +
+          '<button type="button" class="btn ghost danger block" data-action="reset-from-lock">이 기기 데이터 초기화</button>' +
+          '</div>'
+        : '') +
+      '</div></div>';
+  }
+
+  function submitPin() {
+    var s = state.sheet;
+    if (!s || s.type !== 'pin') return;
+    var pin = String(s.buf || '');
+    if (pin.length !== 4) return;
+
+    if (s.mode === 'set') {
+      if (s.stage === 'new') {
+        s.first = pin;
+        s.stage = 'confirm';
+        s.buf = '';
+        s.err = '';
+        renderAll();
+        return;
+      }
+      if (pin === s.first) {
+        setPin(pin);
+        state.sheet = null;
+        renderAll();
+        toast('관리자 비밀번호를 설정했어요. 체크·보기는 그대로, 일정 수정만 잠깁니다');
+        return;
+      }
+      s.stage = 'new';
+      s.first = '';
+      s.buf = '';
+      s.err = '두 번 입력한 번호가 달라요. 처음부터 다시 눌러 주세요.';
+      renderAll();
+      return;
+    }
+
+    if (state.pinBlockUntil > Date.now()) {
+      s.buf = '';
+      s.err = '';
+      renderAll();
+      return;
+    }
+    if (verifyPin(pin)) {
+      var after = s.after;
+      state.sheet = null;
+      renderAll();
+      if (typeof after === 'function') after();
+      else toast('관리자 잠금을 풀었어요');
+      return;
+    }
+    s.buf = '';
+    s.err = state.pinBlockUntil > Date.now()
+      ? '5번 틀렸어요. 30초 뒤에 다시 시도해 주세요.'
+      : '비밀번호가 맞지 않아요. (' + state.pinFails + '/5)';
+    renderAll();
+  }
+
+  /* ---------- 렌더 ---------- */
+
+  function renderLockBtn() {
+    var btn = document.getElementById('lockBtn');
+    if (!btn) return;
+    var on = hasPin();
+    var locked = on && !state.unlocked;
+    btn.hidden = !on;
+    btn.textContent = locked ? '🔒' : '🔓';
+    btn.setAttribute('aria-label', locked ? '관리자 잠금 풀기' : '관리자 잠금 걸기');
+    btn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    btn.title = locked ? '관리자 잠금 풀기' : '관리자 잠금 걸기';
+  }
 
   function renderAll() {
     var today = document.getElementById('todayLine');
@@ -898,6 +1234,7 @@
     if (main) main.innerHTML = renderMain();
     var tabBar = document.getElementById('tabBar');
     if (tabBar) tabBar.innerHTML = renderTabBar();
+    renderLockBtn();
     renderSheet();
   }
 
@@ -942,6 +1279,16 @@
     var id = state.sheet ? state.sheet.id : null;
     var result;
 
+    /* 잠금이 걸린 뒤 Enter 로 폼이 넘어오는 경우를 막는다 */
+    if (lockRequired()) {
+      var pending = state.sheet ? { type: state.sheet.type, id: state.sheet.id } : null;
+      showFormError(form, '관리자 비밀번호가 필요해요.');
+      openPinSheet('unlock', function () {
+        if (pending) state.sheet = { type: pending.type, id: pending.id };
+        renderAll();
+      });
+      return;
+    }
     if (type === 'kid') {
       result = upsertKid({
         id: id,
@@ -1149,6 +1496,7 @@
       var line = document.getElementById('todayLine');
       if (line) line.textContent = headerLine();
     }
+    autoLockCheck();
     checkNotifications();
   }
 
@@ -1194,9 +1542,13 @@
           '개 · 할 일 ' + next.routines.length + '개 · 숙제 ' + next.homeworks.length + '개)')) return;
         state.data = next;
         state.kid = 'all';
+        /* 불러온 사람을 관리자로 본다 — 백업에 잠금이 들어 있어도 이번 화면에서는 풀린 상태로 둔다 */
+        state.unlocked = true;
         save();
         renderAll();
-        toast('백업을 불러왔어요');
+        toast(next.lock && next.lock.hash
+          ? '백업을 불러왔어요. 관리자 비밀번호도 함께 복원됐어요'
+          : '백업을 불러왔어요');
       } catch (e) {
         toast('백업 파일을 읽을 수 없어요.');
       }
@@ -1304,11 +1656,31 @@
     toast('모든 데이터를 지웠어요');
   }
 
+  /* 비밀번호를 잊었을 때 — 이 기기 데이터를 초기화(잠금까지 함께 사라짐)하고 백업으로 복원 */
+  function resetFromLockScreen() {
+    if (!window.confirm('이 기기의 앱 데이터를 모두 지울까요?\n아이·학원·할 일·숙제·관리자 비밀번호가 함께 지워집니다. 되돌릴 수 없어요.')) return;
+    var typed = '';
+    try { typed = String(window.prompt('정말 초기화하려면 “초기화”를 입력해 주세요.', '') || ''); } catch (e) { typed = ''; }
+    if (typed.trim() !== '초기화') {
+      toast('입력한 내용이 달라 초기화하지 않았어요');
+      return;
+    }
+    state.data = blankData();
+    state.kid = 'all';
+    state.view = 'today';
+    state.sheet = null;
+    state.unlocked = true;
+    save();
+    renderAll();
+    toast('앱 데이터를 초기화했어요. 백업 파일이 있으면 불러와 주세요');
+  }
+
   /* ================= 이벤트 ================= */
 
   function handleClick(event) {
     var target = event.target;
     if (!target || !target.closest) return;
+    markActivity();
 
     var pick = target.closest('[data-pickgroup]');
     if (pick) {
@@ -1330,7 +1702,12 @@
 
     switch (action) {
       case 'set-view':
-        state.view = el.getAttribute('data-view');
+        var nextView = el.getAttribute('data-view');
+        if (nextView === 'settings' && lockRequired()) {
+          openPinSheet('unlock', function () { state.view = 'settings'; renderAll(); });
+          break;
+        }
+        state.view = nextView;
         renderAll();
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); }
         break;
@@ -1343,28 +1720,28 @@
         renderAll();
         break;
       case 'add-kid':
-        openSheet('kid', null);
+        guardEdit(function () { openSheet('kid', null); });
         break;
       case 'add-class':
-        openSheet('class', null);
+        guardEdit(function () { openSheet('class', null); });
         break;
       case 'add-routine':
-        openSheet('routine', null);
+        guardEdit(function () { openSheet('routine', null); });
         break;
       case 'add-homework':
-        openSheet('homework', null);
+        guardEdit(function () { openSheet('homework', null); });
         break;
       case 'edit-kid':
-        openSheet('kid', id);
+        openItemSheet('kid', id);
         break;
       case 'edit-class':
-        openSheet('class', id);
+        openItemSheet('class', id);
         break;
       case 'edit-routine':
-        openSheet('routine', id);
+        openItemSheet('routine', id);
         break;
       case 'edit-hw':
-        openSheet('homework', id);
+        openItemSheet('homework', id);
         break;
       case 'toggle-hw':
         toggleHomework(id);
@@ -1393,7 +1770,72 @@
         closeSheet();
         break;
       case 'delete-item':
-        deleteCurrentSheetItem();
+        guardEdit(deleteCurrentSheetItem);
+        break;
+      case 'unlock-edit':
+        var viewing = state.sheet;
+        openPinSheet('unlock', function () {
+          if (viewing) { state.sheet = { type: viewing.type, id: viewing.id, readOnly: false }; renderAll(); }
+        });
+        break;
+      case 'pin-key':
+        var sheetPinState = state.sheet;
+        if (!sheetPinState || sheetPinState.type !== 'pin') break;
+        var digit = el.getAttribute('data-key');
+        if (digit === 'del') sheetPinState.buf = String(sheetPinState.buf || '').slice(0, -1);
+        else if (/^[0-9]$/.test(digit || '') && String(sheetPinState.buf || '').length < 4) {
+          sheetPinState.buf = String(sheetPinState.buf || '') + digit;
+        }
+        sheetPinState.err = '';
+        if (String(sheetPinState.buf || '').length === 4) { submitPin(); break; }
+        renderAll();
+        break;
+      case 'pin-restart':
+        if (state.sheet && state.sheet.type === 'pin') {
+          state.sheet.stage = 'new';
+          state.sheet.first = '';
+          state.sheet.buf = '';
+          state.sheet.err = '';
+          renderAll();
+        }
+        break;
+      case 'pin-forgot':
+        if (state.sheet && state.sheet.type === 'pin') {
+          state.sheet.help = !state.sheet.help;
+          renderAll();
+        } else {
+          openPinSheet('unlock');
+          if (state.sheet && state.sheet.type === 'pin') { state.sheet.help = true; renderAll(); }
+        }
+        break;
+      case 'reset-from-lock':
+        resetFromLockScreen();
+        break;
+      case 'lock-set':
+        guardEdit(function () { openPinSheet('set'); });
+        break;
+      case 'lock-change':
+        guardEdit(function () { openPinSheet('set'); });
+        break;
+      case 'lock-unlock':
+        if (!hasPin()) { toast('아직 관리자 비밀번호가 없어요. 설정에서 먼저 만들어 주세요.'); break; }
+        openPinSheet('unlock', function () { renderAll(); });
+        break;
+      case 'lock-now':
+        lockNow();
+        renderAll();
+        break;
+      case 'toggle-lock':
+        if (!hasPin()) { toast('설정에서 관리자 비밀번호를 먼저 만들어 주세요.'); break; }
+        if (lockRequired()) openPinSheet('unlock', function () { renderAll(); });
+        else { lockNow(); renderAll(); }
+        break;
+      case 'lock-off':
+        if (!hasPin()) break;
+        if (!window.confirm('관리자 비밀번호를 삭제할까요?\n삭제하면 아이도 일정을 고칠 수 있게 됩니다.')) break;
+        clearPin();
+        renderAll();
+        toast('관리자 비밀번호를 삭제했어요');
         break;
       case 'toggle-setting':
         var key = el.getAttribute('data-key');
@@ -1419,10 +1861,10 @@
         exportICS(el.getAttribute('data-scope'));
         break;
       case 'load-sample':
-        loadSamplePlan();
+        guardEdit(loadSamplePlan);
         break;
       case 'reset-all':
-        resetAll();
+        guardEdit(resetAll);
         break;
       case 'install':
         if (state.installEvent) {
@@ -1473,6 +1915,13 @@
   function handleChange(event) {
     var t = event.target;
     if (!t || !t.getAttribute) return;
+    var lockKey = t.getAttribute('data-locksetting');
+    if (lockKey === 'autoLockMin') {
+      setLockAutoMin(t.value);
+      renderAll();
+      toast('자동 잠금 시간을 바꿨어요');
+      return;
+    }
     var key = t.getAttribute('data-setting');
     if (key) {
       state.data.settings[key] = t.value;
@@ -1486,6 +1935,22 @@
   }
 
   function handleKeydown(event) {
+    markActivity();
+    var s = state.sheet;
+    if (s && s.type === 'pin' && event.key) {
+      if (/^[0-9]$/.test(event.key) && String(s.buf || '').length < 4) {
+        s.buf = String(s.buf || '') + event.key;
+        s.err = '';
+        if (s.buf.length === 4) submitPin();
+        else renderAll();
+        return;
+      }
+      if (event.key === 'Backspace' && String(s.buf || '').length) {
+        s.buf = String(s.buf).slice(0, -1);
+        renderAll();
+        return;
+      }
+    }
     if (event.key === 'Escape' && state.sheet) closeSheet();
   }
 
@@ -1540,6 +2005,8 @@
     state.dayKey = L.dateKey(new Date());
     state.kid = 'all';
     state.view = 'today';
+    state.unlocked = false; /* 새로고침하면 관리자 잠금은 다시 걸린다 */
+    state.lastActivity = Date.now();
     var hash = String(window.location.hash || '').replace('#', '');
     if (TABS.some(function (t) { return t.id === hash; })) state.view = hash;
     pruneChecks();
@@ -1589,6 +2056,26 @@
     openSheet: openSheet,
     closeSheet: closeSheet,
     submitSheet: submitSheet,
+    openItemSheet: openItemSheet,
+    guardEdit: guardEdit,
+    lockInfo: lockInfo,
+    hasPin: hasPin,
+    lockRequired: lockRequired,
+    setPin: setPin,
+    clearPin: clearPin,
+    verifyPin: verifyPin,
+    lockNow: lockNow,
+    unlockSession: unlockSession,
+    autoLockCheck: autoLockCheck,
+    setLockAutoMin: setLockAutoMin,
+    openPinSheet: openPinSheet,
+    submitPin: submitPin,
+    sheetPin: sheetPin,
+    renderLockBtn: renderLockBtn,
+    lockCard: lockCard,
+    lockedCard: lockedCard,
+    resetFromLockScreen: resetFromLockScreen,
+    markActivity: markActivity,
     renderMain: renderMain,
     renderKidBar: renderKidBar,
     renderTabBar: renderTabBar,
@@ -1606,7 +2093,11 @@
     liveText: liveText,
     whenText: whenText,
     exportICS: exportICS,
-    toast: toast
+    toast: toast,
+    handleClick: handleClick,
+    handleChange: handleChange,
+    handleKeydown: handleKeydown,
+    handleSubmit: handleSubmit
   };
 
   if (document.readyState === 'loading') {
