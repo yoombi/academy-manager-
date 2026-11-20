@@ -1024,7 +1024,7 @@
       chipGroup('emoji', emojis, k ? k.emoji : EMOJIS[state.data.kids.length % EMOJIS.length], false) + '</div>' +
       '<div class="field"><span class="field-label">색상</span>' +
       chipGroup('color', colors, k ? k.color : COLORS[state.data.kids.length % COLORS.length], false) + '</div>';
-    return sheetShell('kid', (id ? '아이 수정' : '아이 추가'), body, id);
+    return sheetShell('kid', sheetReadOnly() ? '아이 정보' : (id ? '아이 수정' : '아이 추가'), body, id);
   }
 
   function sheetClass(id) {
@@ -1046,7 +1046,7 @@
       '<label class="field"><span class="field-label">메모</span>' +
       '<textarea class="input" name="memo" rows="2" placeholder="준비물, 하교 후 바로 이동 등" maxlength="200">' + esc(c ? c.memo : '') + '</textarea></label>' +
       '<p class="hint-line">시간을 비우면 “시간 미정”으로 표시돼요. (예: 도서관 책읽기)</p>';
-    return sheetShell('class', (id ? '학원 수정' : '학원 추가'), body, id);
+    return sheetShell('class', sheetReadOnly() ? '학원 일정' : (id ? '학원 수정' : '학원 추가'), body, id);
   }
 
   function sheetRoutine(id) {
@@ -1063,7 +1063,7 @@
       '<input class="input" name="time" value="' + esc(r ? r.time : '') + '" placeholder="예: 19:00~21:00" maxlength="30"></label>' +
       '<label class="field"><span class="field-label">메모</span>' +
       '<textarea class="input" name="memo" rows="2" placeholder="교재 이름, 분량 등" maxlength="200">' + esc(r ? r.memo : '') + '</textarea></label>';
-    return sheetShell('routine', (id ? '할 일 수정' : '할 일 추가'), body, id);
+    return sheetShell('routine', sheetReadOnly() ? '할 일' : (id ? '할 일 수정' : '할 일 추가'), body, id);
   }
 
   function sheetHomework(id) {
@@ -1088,7 +1088,7 @@
       (h ? '<div class="field"><span class="field-label">상태</span><div class="chips">' +
         '<button type="button" class="chip' + (h.done ? ' on' : '') + '" data-action="toggle-done-in-sheet">' +
         (h.done ? '✓ 완료됨' : '미완료') + '</button></div></div>' : '');
-    return sheetShell('homework', (id ? '숙제 수정' : '숙제 추가'), body, id);
+    return sheetShell('homework', sheetReadOnly() ? '숙제' : (id ? '숙제 수정' : '숙제 추가'), body, id);
   }
 
   /* ---------- 관리자 비밀번호(PIN) 입력 ---------- */
@@ -1147,9 +1147,9 @@
       pinPad() +
       '<div class="sheet-actions">' +
       '<button type="button" class="btn ghost" data-action="close-sheet">취소</button>' +
-      (setMode && confirming
+      (confirming
         ? '<button type="button" class="btn ghost" data-action="pin-restart">처음부터</button>'
-        : '<button type="button" class="btn ghost" data-action="pin-forgot">비밀번호를 잊었어요</button>') +
+        : (setMode ? '' : '<button type="button" class="btn ghost" data-action="pin-forgot">비밀번호를 잊었어요</button>')) +
       '</div>' +
       (s.help
         ? '<div class="pin-help">' +
