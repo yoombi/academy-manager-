@@ -685,6 +685,202 @@
     return out;
   }
 
+  /* ---------- 주간 표(한눈에 보기) ----------
+     화면과 무관한 계산만 담는다: 시간대 행, 칸 배치(겹치면 나란히), 요일 폭, 파스텔 색. */
+
+  var GRID_STEP = 60;            /* 시간대 행 기본 간격(분) */
+  var GRID_MIN_DAY = 1;
+  var GRID_MAX_DAY = 7;
+  /* 과목·학원 이름에서 정해지는 파스텔 색상(색상환 각도) */
+  var GRID_HUES = [214, 344, 28, 42, 148, 176, 194, 262, 300, 88];
+
+  /* 일정의 분 단위 구간. 시간이 없으면 null(종일·메모 행), 종료가 없거나 시작보다 이르면 1시간으로 본다. */
+  function classMinutes(cls) {
+    var s = hhmmToMinutes(cls && cls.start);
+    if (s == null) return null;
+    var e = hhmmToMinutes(cls && cls.end);
+    if (e == null || e <= s) e = s + GRID_STEP;
+    if (e > 1440) e = 1440;
+    return { start: s, end: e, minutes: e - s };
+  }
+
+  /* 분 → “16:00” (24:00 은 그대로 24:00) */
+  function hhmmText(mins) {
+    var m = Math.max(0, Math.min(1440, Number(mins) || 0));
+    if (m === 1440) return '24:00';
+    return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+  }
+
+  /* 분 → “13시” / “13:30” */
+  function hourText(mins) {
+    var m = Math.max(0, Math.min(1440, Number(mins) || 0));
+    var h = Math.floor(m / 60), mi = m % 60;
+    if (mi === 0) return h + '시';
+    return (h < 10 ? '0' : '') + h + ':' + pad2(mi);
+  }
+
+  /* 시간대 행: “13시~14시” */
+  function gridRows(fromMin, toMin, step) {
+    var stepMin = step && step > 0 ? step : GRID_STEP;
+    var from = Math.max(0, Math.min(1440, fromMin));
+    var to = Math.max(from + stepMin, Math.min(1440, toMin));
+    var rows = [];
+    for (var m = from; m < to; m += stepMin) {
+      var end = Math.min(m + stepMin, 1440);
+      rows.push({
+        index: rows.length,
+        start: m,
+        end: end,
+        from: hourText(m),
+        to: hourText(end),
+        label: hourText(m) + '~' + hourText(end)
+      });
+    }
+    return rows;
+  }
+
+  function gridHue(name) {
+    var text = String(name == null ? '' : name);
+    var h = 0;
+    for (var i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) % 9973;
+    return GRID_HUES[h % GRID_HUES.length];
+  }
+
+  /* 한 요일 안에서 겹치는 일정을 나란히(lane) 놓기 */
+  function layoutLanes(items) {
+    var list = (items || []).slice().sort(function (a, b) {
+      if (a.start !== b.start) return a.start - b.start;
+      return b.minutes - a.minutes;
+    });
+    var cluster = [], clusterEnd = -1;
+
+    function flush() {
+      if (!cluster.length) return;
+      var lanes = [];   /* lanes[n] = 그 lane 에 놓인 마지막 일정의 끝 */
+      cluster.forEach(function (it) {
+        var lane = -1;
+        for (var i = 0; i < lanes.length; i += 1) {
+          if (lanes[i] <= it.start) { lane = i; break; }
+        }
+        if (lane < 0) { lane = lanes.length; lanes.push(0); }
+        lanes[lane] = it.end;
+        it.lane = lane;
+      });
+      var total = Math.max(1, lanes.length);
+      cluster.forEach(function (it) { it.lanes = total; });
+      cluster = [];
+      clusterEnd = -1;
+    }
+
+    list.forEach(function (it) {
+      if (cluster.length && it.start >= clusterEnd) flush();
+      cluster.push(it);
+      clusterEnd = Math.max(clusterEnd, it.end);
+    });
+    flush();
+    return list;
+  }
+
+  /* 주간 표 계산
+     classes: 학원 일정 배열
+     opt: { days:[1..7] (없으면 주말 자동), hideWeekend:'auto'|'always'|'never', step:60 }
+     반환: { days, rows, from, to, step, totalMinutes, events, allDay, hasWeekend, weekendHidden, empty } */
+  function weekGrid(classes, opt) {
+    opt = opt || {};
+    var step = opt.step && opt.step > 0 ? opt.step : GRID_STEP;
+    var list = (classes || []).filter(Boolean);
+    var hasWeekend = list.some(function (c) {
+      return (c.days || []).indexOf(6) >= 0 || (c.days || []).indexOf(7) >= 0;
+    });
+    var mode = opt.hideWeekend || 'auto';
+    var weekendHidden = mode === 'always' || (mode === 'auto' && !hasWeekend);
+
+    var days = opt.days;
+    if (!days) {
+      days = [];
+      for (var d = GRID_MIN_DAY; d <= GRID_MAX_DAY; d += 1) {
+        if (weekendHidden && d > 5) continue;
+        days.push(d);
+      }
+    }
+    days = days.slice().sort(function (a, b) { return a - b; });
+
+    var from = null, to = null;
+    list.forEach(function (c) {
+      var r = classMinutes(c);
+      if (!r) return;
+      if (from == null || r.start < from) from = r.start;
+      if (to == null || r.end > to) to = r.end;
+    });
+    var rows = [], totalMinutes = 0;
+    if (from != null) {
+      var startRow = Math.floor(from / step) * step;
+      var endRow = Math.ceil(to / step) * step;
+      if (endRow <= startRow) endRow = startRow + step;
+      endRow = Math.min(1440, endRow);
+      rows = gridRows(startRow, endRow, step);
+      from = startRow;
+      to = endRow;
+      totalMinutes = endRow - startRow;
+    }
+
+    var events = [], allDay = [];
+    list.forEach(function (c) {
+      var r = classMinutes(c);
+      (c.days || []).forEach(function (day) {
+        if (days.indexOf(day) < 0) return;
+        if (!r) {
+          allDay.push({ id: c.id, kidId: c.kidId || '', name: c.name, day: day, memo: c.memo || '', place: c.place || '' });
+          return;
+        }
+        events.push({
+          id: c.id,
+          kidId: c.kidId || '',
+          name: c.name,
+          day: day,
+          start: r.start,
+          end: r.end,
+          minutes: r.minutes,
+          timeText: hhmmText(r.start) + '~' + hhmmText(r.end),
+          compact: r.minutes < 50,
+          hue: gridHue(c.name),
+          place: c.place || '',
+          memo: c.memo || ''
+        });
+      });
+    });
+
+    /* 요일별 배치 → 위치(0~1) */
+    days.forEach(function (day) {
+      var mine = events.filter(function (e) { return e.day === day; });
+      layoutLanes(mine).forEach(function (e) {
+        if (!totalMinutes) return;
+        e.top = (e.start - from) / totalMinutes;
+        e.height = Math.max(0, (e.end - e.start) / totalMinutes);
+        e.left = e.lane / e.lanes;
+        e.width = 1 / e.lanes;
+      });
+    });
+    events.sort(function (a, b) {
+      if (a.day !== b.day) return a.day - b.day;
+      return a.start - b.start;
+    });
+
+    return {
+      days: days,
+      rows: rows,
+      from: from == null ? 0 : from,
+      to: to == null ? 0 : to,
+      step: step,
+      totalMinutes: totalMinutes,
+      events: events,
+      allDay: allDay,
+      hasWeekend: hasWeekend,
+      weekendHidden: weekendHidden,
+      empty: !events.length && !allDay.length
+    };
+  }
+
   var api = {
     DAY_LABELS: DAY_LABELS,
     DAY_LONGS: DAY_LONGS,
@@ -730,7 +926,14 @@
     icsDurationMinutes: icsDurationMinutes,
     icsUntilPassed: icsUntilPassed,
     parseICS: parseICS,
-    classDuplicates: classDuplicates
+    classDuplicates: classDuplicates,
+    classMinutes: classMinutes,
+    hourText: hourText,
+    hhmmText: hhmmText,
+    gridRows: gridRows,
+    gridHue: gridHue,
+    layoutLanes: layoutLanes,
+    weekGrid: weekGrid
   };
 
   global.AcademyLogic = api;

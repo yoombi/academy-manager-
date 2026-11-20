@@ -4,7 +4,7 @@
 
   var L = window.AcademyLogic;
   var STORE_KEY = 'academy-manager:v1';
-  var APP_VERSION = '1.4.0';
+  var APP_VERSION = '1.5.0';
 
   var COLORS = ['#6366f1', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#0ea5e9', '#ec4899'];
   var EMOJIS = ['🦊', '🐰', '🐻', '🐼', '🐯', '🐶', '🐱', '🐨', '🦁', '🐥', '🐙', '🦄'];
@@ -22,6 +22,8 @@
     data: null,
     sheet: null,
     dayKey: null,
+    /* 한눈에 보기(주간 표) — 잠금과 무관한 보기 전용 화면 */
+    grid: null,
     installEvent: null,
     swReg: null,
     /* 관리자 잠금: 해제 상태는 이번 화면(세션)에서만 유지되고 새로고침하면 다시 잠긴다 */
@@ -766,13 +768,15 @@
         '</div></li>';
     }).join('');
 
-    return '<section class="card ics-import-card">' +
+    return viewSwitchBar() +
+      '<section class="card ics-import-card">' +
       '<header class="card-head"><h2>캘린더에서 가져오기</h2><span class="card-count">.ics</span></header>' +
       '<p class="card-desc">구글 캘린더에서 내보낸 파일을 불러오면 학원 일정이 이 시간표에 자동으로 채워져요.</p>' +
       '<button class="btn primary block" data-action="import-ics">📅 구글 캘린더(.ics) 불러오기</button>' +
       '</section>' +
       '<section class="card">' +
       '<header class="card-head"><h2>이번 주 시간표</h2>' +
+      '<button class="btn tiny" data-action="open-grid">📊 표로 보기</button>' +
       '<button class="btn tiny" data-action="add-class">＋ 학원</button></header>' +
       '<div class="week">' + rows + '</div></section>' +
       '<section class="card">' +
@@ -786,6 +790,187 @@
       '<span class="chip-name">' + esc(c.name) + '</span>' +
       '<span class="chip-time">' + esc(timeLabel(c)) + '</span>' +
       '</button>';
+  }
+
+  /* ---------- 한눈에 보기 (월~일 주간 표) ----------
+     읽기 전용 화면이다. 잠겨 있어도 PIN 없이 열리고, 칸을 눌러 수정할 때만
+     기존처럼 보기 전용 → 비밀번호 확인 순서를 거친다. */
+
+  function viewSwitchBar() {
+    return '<div class="view-switch" role="group" aria-label="시간표 보기 방식">' +
+      '<span class="view-switch-on" aria-current="true">📋 목록 보기</span>' +
+      '<button class="view-switch-btn" type="button" data-action="open-grid">📊 한눈에 보기</button>' +
+      '</div>';
+  }
+
+  function gridOpts() {
+    if (!state.grid) state.grid = { kid: state.kid === 'all' ? 'all' : state.kid, weekend: 'auto' };
+    if (state.grid.kid !== 'all' && !kidById(state.grid.kid)) state.grid.kid = 'all';
+    if (['auto', 'always', 'never'].indexOf(state.grid.weekend) < 0) state.grid.weekend = 'auto';
+    return state.grid;
+  }
+
+  /* 보기 전용이라 잠금과 상관없이 바로 연다 (읽기는 막지 않는다) */
+  function openGrid(kidId) {
+    state.grid = { kid: kidId || (state.kid === 'all' ? 'all' : state.kid), weekend: 'auto' };
+    state.sheet = null;
+    renderAll();
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }
+
+  function closeGrid() {
+    state.grid = null;
+    renderAll();
+  }
+
+  function gridKids() {
+    var g = gridOpts();
+    if (g.kid === 'all') return state.data.kids.slice();
+    var k = kidById(g.kid);
+    return k ? [k] : state.data.kids.slice();
+  }
+
+  function gridScope() {
+    var g = gridOpts();
+    return g.kid === 'all' ? state.data.classes.slice() : state.data.classes.filter(function (c) { return c.kidId === g.kid; });
+  }
+
+  function gridWeekText() {
+    var dates = L.weekDates(new Date());
+    var a = dates[0], b = dates[6];
+    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일(' + L.dayLabel(L.dayIndex(a)) + ') ~ ' +
+      (b.getMonth() + 1) + '월 ' + b.getDate() + '일(' + L.dayLabel(L.dayIndex(b)) + ')';
+  }
+
+  function pctText(x) {
+    var n = Math.round((Number(x) || 0) * 10000) / 100;
+    return n + '%';
+  }
+
+  function gridKidChips() {
+    var g = gridOpts();
+    if (state.data.kids.length < 2) return '';
+    var chips = '<button class="seg-btn' + (g.kid === 'all' ? ' on' : '') + '" type="button" data-action="grid-kid" data-kid="all">👥 모든 아이</button>';
+    chips += state.data.kids.map(function (k) {
+      return '<button class="seg-btn' + (g.kid === k.id ? ' on' : '') + '" type="button" data-action="grid-kid" data-kid="' + k.id + '">' +
+        '<span class="seg-emoji" aria-hidden="true">' + esc(k.emoji) + '</span>' + esc(k.name) + '</button>';
+    }).join('');
+    return '<div class="seg" role="group" aria-label="아이 골라 보기">' + chips + '</div>';
+  }
+
+  function gridEventHtml(e) {
+    var style = '--h:' + e.hue + ';top:' + pctText(e.top) + ';height:' + pctText(e.height) +
+      ';left:calc(' + pctText(e.left) + ' + 2px);width:calc(' + pctText(e.width) + ' - 4px)';
+    var tip = e.name + ' ' + e.timeText + (e.place ? ' · ' + e.place : '') + (e.memo ? ' · ' + e.memo : '');
+    return '<button class="tt-ev' + (e.compact ? ' is-compact' : '') + '" type="button" style="' + style + '"' +
+      ' data-action="edit-class" data-id="' + esc(e.id) + '" title="' + esc(tip) + '">' +
+      '<span class="tt-ev-name">' + esc(e.name) + '</span>' +
+      '<span class="tt-ev-time">' + esc(e.timeText) + '</span>' +
+      '</button>';
+  }
+
+  function gridBlock(kid) {
+    var g = gridOpts();
+    var mine = state.data.classes.filter(function (c) { return c.kidId === kid.id; });
+    var view = L.weekGrid(mine, { hideWeekend: g.weekend });
+    var dates = L.weekDates(new Date());
+    var todayIdx = L.dayIndex(new Date());
+
+    var head = '<header class="tt-block-head">' +
+      '<span class="tag" style="--c:' + esc(kid.color) + '"><span class="tag-emoji" aria-hidden="true">' + esc(kid.emoji) + '</span>' + esc(kid.name) + '</span>' +
+      '<span class="tt-count">학원 ' + mine.length + '개</span></header>';
+
+    var dayHeads = view.days.map(function (d) {
+      var on = d === todayIdx;
+      return '<div class="tt-dayhead' + (on ? ' is-today' : '') + '"' + (on ? ' aria-current="date"' : '') + '>' +
+        '<b>' + L.dayLabel(d) + '</b><span>' + L.monthDay(dates[d - 1]) + '</span></div>';
+    }).join('');
+
+    var allDayCells = view.days.map(function (d) {
+      var chips = view.allDay.filter(function (e) { return e.day === d; }).map(function (e) {
+        return '<button class="tt-allday-chip" type="button" data-action="edit-class" data-id="' + esc(e.id) + '"' +
+          ' title="' + esc(e.name + (e.memo ? ' · ' + e.memo : '')) + '">' + esc(e.name) + '</button>';
+      }).join('');
+      return '<div class="tt-allday-cell' + (d === todayIdx ? ' is-today' : '') + '">' + chips + '</div>';
+    }).join('');
+
+    var hourLabels = view.rows.map(function (r) {
+      return '<div class="tt-hour" title="' + esc(r.label) + '"><b>' + esc(r.from) + '</b><span>~' + esc(r.to) + '</span></div>';
+    }).join('');
+
+    var cols = view.days.map(function (d) {
+      var evs = view.events.filter(function (e) { return e.day === d; }).map(gridEventHtml).join('');
+      return '<div class="tt-col' + (d === todayIdx ? ' is-today' : '') + '">' + evs + '</div>';
+    }).join('');
+
+    var tracks = view.rows.length
+      ? '<div class="tt-hours" aria-hidden="true">' + hourLabels + '</div>' +
+        '<div class="tt-cols">' + cols + '</div>'
+      : '';
+
+    var note = view.empty ? '<p class="tt-empty">이번 주에 등록된 학원이 없어요.</p>' : '';
+
+    return '<section class="tt-block" style="--c:' + esc(kid.color) + '">' + head + note +
+      (view.empty ? '' :
+        '<div class="tt-scroll">' +
+        '<div class="tt" style="--rows:' + (view.rows.length || 1) + ';--days:' + view.days.length + '">' +
+        '<div class="tt-corner" aria-hidden="true">시간</div>' +
+        '<div class="tt-days">' + dayHeads + '</div>' +
+        '<div class="tt-allday-label"><b>종일</b><span>메모</span></div>' +
+        '<div class="tt-allday">' + allDayCells + '</div>' +
+        tracks +
+        '</div></div>') +
+      '</section>';
+  }
+
+  function gridHtml() {
+    var g = gridOpts();
+    var scoped = gridScope();
+    var hasWeekend = scoped.some(function (c) {
+      return (c.days || []).indexOf(6) >= 0 || (c.days || []).indexOf(7) >= 0;
+    });
+    var weekendHidden = g.weekend === 'always' || (g.weekend === 'auto' && !hasWeekend);
+    var blocks = gridKids().map(gridBlock).join('');
+    if (!scoped.length) {
+      var who = g.kid === 'all' ? '' : esc((kidById(g.kid) || {}).name || '') + '의 ';
+      blocks = '<section class="card notice grid-notice">' +
+        '<h2>이번 주 학원 일정이 없어요</h2>' +
+        '<p>' + who + '학원을 등록하면 월~일 표에 바로 채워져요.</p>' +
+        '<button class="btn primary" type="button" data-action="add-class">학원 등록하기</button></section>';
+    }
+
+    return '<div class="grid-overlay" role="dialog" aria-modal="true" aria-label="주간 시간표 한눈에 보기">' +
+      '<div class="grid-top">' +
+      '<div class="grid-top-row">' +
+      '<div class="grid-title-wrap"><h2 class="grid-title">📊 한눈에 보기</h2>' +
+      '<p class="grid-week">' + esc(gridWeekText()) + '</p></div>' +
+      '<div class="grid-actions">' +
+      '<button class="btn tiny ghost" type="button" data-action="print-grid">🖨️ 인쇄/PDF</button>' +
+      '<button class="icon-btn grid-close" type="button" data-action="close-grid" aria-label="닫기">✕</button>' +
+      '</div></div>' +
+      '<div class="grid-tools">' + gridKidChips() +
+      '<button class="btn tiny ghost" type="button" data-action="grid-weekend">' +
+      (weekendHidden ? '토·일 보기' : '토·일 숨기기') + '</button>' +
+      '<span class="grid-hint">' + (lockRequired() ? '🔒 칸을 누르면 보기 전용으로 열려요' : '칸을 누르면 일정을 볼 수 있어요') + '</span>' +
+      '</div></div>' +
+      '<div class="grid-body"><div class="grid-blocks">' + blocks + '</div></div></div>';
+  }
+
+  function renderGrid() {
+    var root = document.getElementById('gridRoot');
+    if (!root) return;
+    if (!state.grid) {
+      root.innerHTML = '';
+      document.body.classList.remove('grid-open');
+      return;
+    }
+    document.body.classList.add('grid-open');
+    root.innerHTML = gridHtml();
+  }
+
+  function printGrid() {
+    if (!state.grid) return;
+    try { window.print(); } catch (e) { toast('이 브라우저에서는 인쇄를 열 수 없어요.'); }
   }
 
   /* ---------- 숙제 ---------- */
@@ -1489,6 +1674,7 @@
     var tabBar = document.getElementById('tabBar');
     if (tabBar) tabBar.innerHTML = renderTabBar();
     renderLockBtn();
+    renderGrid();
     renderSheet();
   }
 
@@ -1973,6 +2159,28 @@
         state.hwFilter = el.getAttribute('data-filter') || 'open';
         renderAll();
         break;
+      case 'open-grid':
+        /* 보기 전용 — 잠겨 있어도 PIN 없이 연다 */
+        openGrid();
+        break;
+      case 'close-grid':
+        closeGrid();
+        break;
+      case 'grid-kid':
+        gridOpts().kid = el.getAttribute('data-kid') || 'all';
+        renderAll();
+        break;
+      case 'grid-weekend':
+        var gOpts = gridOpts();
+        var gScoped = gridScope();
+        var gWeekend = gScoped.some(function (c) { return (c.days || []).indexOf(6) >= 0 || (c.days || []).indexOf(7) >= 0; });
+        var gHidden = gOpts.weekend === 'always' || (gOpts.weekend === 'auto' && !gWeekend);
+        gOpts.weekend = gHidden ? 'never' : 'always';
+        renderAll();
+        break;
+      case 'print-grid':
+        printGrid();
+        break;
       case 'add-kid':
         guardEdit(function () { openSheet('kid', null); });
         break;
@@ -2261,6 +2469,7 @@
       }
     }
     if (event.key === 'Escape' && state.sheet) closeSheet();
+    else if (event.key === 'Escape' && state.grid) closeGrid();
   }
 
   /* ================= 서비스워커 / 설치 ================= */
@@ -2386,6 +2595,12 @@
     resetFromLockScreen: resetFromLockScreen,
     markActivity: markActivity,
     renderMain: renderMain,
+    renderGrid: renderGrid,
+    gridHtml: gridHtml,
+    openGrid: openGrid,
+    closeGrid: closeGrid,
+    printGrid: printGrid,
+    gridBlock: gridBlock,
     renderKidBar: renderKidBar,
     renderTabBar: renderTabBar,
     renderSheet: renderSheet,
